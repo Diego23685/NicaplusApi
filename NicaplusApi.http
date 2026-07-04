@@ -1,0 +1,6 @@
+@NicaplusApi_HostAddress = http://localhost:5139
+
+GET {{NicaplusApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
