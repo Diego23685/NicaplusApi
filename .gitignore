@@ -1,0 +1,53 @@
+# ==========================================
+# Archivos de Compilación y Salida (.NET)
+# ==========================================
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ex]it/
+
+# ==========================================
+# Configuraciones de Entorno (¡CRÍTICO!)
+# ==========================================
+# Excluye configuraciones locales con contraseñas reales de producción
+appsettings.Development.json
+appsettings.Production.json
+*.secrets.json
+.env
+
+# ==========================================
+# Herramientas de Desarrollo y Editores
+# ==========================================
+# Visual Studio
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Rider / JetBrains
+.idea/
+
+# Sistema Operativo
+Thumbs.db
+.DS_Store
+
+# ==========================================
+# Paquetes y Caché
+# ==========================================
+project.lock.json
+project.fragment.lock.json
+artifacts/
+.nuget/
+**/[Pp]ackages/
