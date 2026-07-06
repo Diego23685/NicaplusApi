@@ -45,11 +45,10 @@ namespace NicaplusApi.Controllers
         [HttpPost]
         public async Task<ActionResult<Producto>> CreateProducto([FromBody] Producto producto)
         {
-            // Validaciones de negocio lógicas
             if (producto.EsDigital || producto.RequiereServicio)
             {
-                producto.StockActual = 0;
-                producto.StockMinimo = 0; // Las recargas y la mano de obra no tienen stock físico
+                // Conservamos la asignación automática pero respetando si el cliente maneja stock de pantallas
+                producto.StockMinimo = 0; 
             }
 
             _context.Productos.Add(producto);

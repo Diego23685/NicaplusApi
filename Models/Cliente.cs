@@ -1,4 +1,6 @@
+using System;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace NicaplusApi.Models
 {
@@ -11,12 +13,21 @@ namespace NicaplusApi.Models
         [StringLength(150)]
         public string Nombre { get; set; } = string.Empty;
 
+        [Required]
         [StringLength(20)]
-        public string Telefono { get; set; } = string.Empty; // Vital para redirigir a WhatsApp
+        public string Telefono { get; set; } = string.Empty; // Destinado a WhatsApp
 
         [StringLength(150)]
         public string Email { get; set; } = string.Empty;
 
-        public int PuntosAcumulados { get; set; } = 0; // Para reportar el "mejor cliente"
+        [Required]
+        public DateTime FechaRegistro { get; set; } = DateTime.Now;
+
+        public string Observaciones { get; set; } = string.Empty;
+
+        [StringLength(250)]
+        public string Etiquetas { get; set; } = string.Empty; // Almacenado como CSV: "VIP, Moroso, Frecuente"
+
+        public int PuntosAcumulados { get; set; } = 0;
     }
 }

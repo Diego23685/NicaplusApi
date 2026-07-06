@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NicaplusApi.Data;
 
@@ -11,9 +12,11 @@ using NicaplusApi.Data;
 namespace NicaplusApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260706030523_AgregarCuentasPorCobrarYPagar")]
+    partial class AgregarCuentasPorCobrarYPagar
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,37 +24,6 @@ namespace NicaplusApi.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
-
-            modelBuilder.Entity("LogAuditoria", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Accion")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("Detalles")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<DateTime>("FechaRegistro")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("IdUsuario")
-                        .HasColumnType("int");
-
-                    b.Property<string>("TablaAfectada")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("LogsAuditoria");
-                });
 
             modelBuilder.Entity("NicaplusApi.Models.Categoria", b =>
                 {
@@ -83,22 +55,10 @@ namespace NicaplusApi.Migrations
                         .HasMaxLength(150)
                         .HasColumnType("varchar(150)");
 
-                    b.Property<string>("Etiquetas")
-                        .IsRequired()
-                        .HasMaxLength(250)
-                        .HasColumnType("varchar(250)");
-
-                    b.Property<DateTime>("FechaRegistro")
-                        .HasColumnType("datetime(6)");
-
                     b.Property<string>("Nombre")
                         .IsRequired()
                         .HasMaxLength(150)
                         .HasColumnType("varchar(150)");
-
-                    b.Property<string>("Observaciones")
-                        .IsRequired()
-                        .HasColumnType("longtext");
 
                     b.Property<int>("PuntosAcumulados")
                         .HasColumnType("int");
@@ -111,33 +71,6 @@ namespace NicaplusApi.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Clientes");
-                });
-
-            modelBuilder.Entity("NicaplusApi.Models.CompraProveedor", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("FechaCompra")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("IdProveedor")
-                        .HasColumnType("int");
-
-                    b.Property<int>("TiempoEntregaRealDias")
-                        .HasColumnType("int");
-
-                    b.Property<decimal>("TotalCompra")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IdProveedor");
-
-                    b.ToTable("ComprasProveedores");
                 });
 
             modelBuilder.Entity("NicaplusApi.Models.CuentaPorCobrar", b =>
@@ -218,38 +151,6 @@ namespace NicaplusApi.Migrations
                     b.ToTable("CuentasPorPagar");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.DetalleCompraProveedor", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("Cantidad")
-                        .HasColumnType("int");
-
-                    b.Property<decimal>("CostoUnitario")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<int>("GarantiaDiasPactada")
-                        .HasColumnType("int");
-
-                    b.Property<int>("IdCompraProveedor")
-                        .HasColumnType("int");
-
-                    b.Property<int>("IdProducto")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IdCompraProveedor");
-
-                    b.HasIndex("IdProducto");
-
-                    b.ToTable("DetallesComprasProveedores");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.DetalleVenta", b =>
                 {
                     b.Property<int>("Id")
@@ -286,49 +187,6 @@ namespace NicaplusApi.Migrations
                     b.ToTable("DetallesVentas");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.GarantiaTicket", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("CostoReposicion")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<string>("CuentaAnterior")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
-
-                    b.Property<string>("CuentaNueva")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
-
-                    b.Property<DateTime>("FechaRepo")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("IdCliente")
-                        .HasColumnType("int");
-
-                    b.Property<int>("IdUsuarioResponsable")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Motivo")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IdCliente");
-
-                    b.HasIndex("IdUsuarioResponsable");
-
-                    b.ToTable("GarantiasTickets");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.Juego", b =>
                 {
                     b.Property<int>("Id")
@@ -348,50 +206,6 @@ namespace NicaplusApi.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Juegos");
-                });
-
-            modelBuilder.Entity("NicaplusApi.Models.MovimientoCaja", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Concepto")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("varchar(50)");
-
-                    b.Property<string>("Detalle")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("varchar(255)");
-
-                    b.Property<DateTime>("Fecha")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int?>("IdCompraProveedor")
-                        .HasColumnType("int");
-
-                    b.Property<int?>("IdVenta")
-                        .HasColumnType("int");
-
-                    b.Property<decimal>("Monto")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<string>("Tipo")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("varchar(50)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IdCompraProveedor");
-
-                    b.HasIndex("IdVenta");
-
-                    b.ToTable("MovimientosCaja");
                 });
 
             modelBuilder.Entity("NicaplusApi.Models.OrdenServicio", b =>
@@ -441,46 +255,6 @@ namespace NicaplusApi.Migrations
                     b.ToTable("OrdenesServicio");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.PerfilCuenta", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("CorreoCuenta")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int?>("IdClienteAsignado")
-                        .HasColumnType("int");
-
-                    b.Property<int>("IdProducto")
-                        .HasColumnType("int");
-
-                    b.Property<string>("NombrePerfil")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<bool>("Ocupado")
-                        .HasColumnType("tinyint(1)");
-
-                    b.Property<string>("PIN")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("PasswordCuenta")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IdProducto");
-
-                    b.ToTable("PerfilesCuentas");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.Producto", b =>
                 {
                     b.Property<int>("Id")
@@ -506,13 +280,6 @@ namespace NicaplusApi.Migrations
                     b.Property<bool>("EsSuscripcion")
                         .HasColumnType("tinyint(1)");
 
-                    b.Property<string>("Estado")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("GarantiaDias")
-                        .HasColumnType("int");
-
                     b.Property<string>("ImagenUrl")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -530,10 +297,6 @@ namespace NicaplusApi.Migrations
 
                     b.Property<decimal>("PrecioVenta")
                         .HasColumnType("decimal(18,2)");
-
-                    b.Property<string>("Proveedor")
-                        .IsRequired()
-                        .HasColumnType("longtext");
 
                     b.Property<bool>("RequiereServicio")
                         .HasColumnType("tinyint(1)");
@@ -586,7 +349,7 @@ namespace NicaplusApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Proveedores");
+                    b.ToTable("Proveedor");
                 });
 
             modelBuilder.Entity("NicaplusApi.Models.Rol", b =>
@@ -610,22 +373,17 @@ namespace NicaplusApi.Migrations
                         new
                         {
                             Id = 1,
-                            NombreRol = "Administrador"
+                            NombreRol = "Admin"
                         },
                         new
                         {
                             Id = 2,
-                            NombreRol = "Socio"
+                            NombreRol = "Cajero"
                         },
                         new
                         {
                             Id = 3,
-                            NombreRol = "Ventas"
-                        },
-                        new
-                        {
-                            Id = 4,
-                            NombreRol = "Soporte"
+                            NombreRol = "Técnico"
                         });
                 });
 
@@ -683,48 +441,6 @@ namespace NicaplusApi.Migrations
                     b.HasIndex("IdProducto");
 
                     b.ToTable("Suscripciones");
-                });
-
-            modelBuilder.Entity("NicaplusApi.Models.TicketSoporte", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("DescripcionFalla")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("Estado")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("varchar(50)");
-
-                    b.Property<DateTime>("FechaCreacion")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<DateTime?>("FechaResolucion")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("IdCliente")
-                        .HasColumnType("int");
-
-                    b.Property<string>("NotasResolucion")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("TipoTicket")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("varchar(100)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IdCliente");
-
-                    b.ToTable("TicketsSoporte");
                 });
 
             modelBuilder.Entity("NicaplusApi.Models.Usuario", b =>
@@ -793,17 +509,6 @@ namespace NicaplusApi.Migrations
                     b.ToTable("Ventas");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.CompraProveedor", b =>
-                {
-                    b.HasOne("NicaplusApi.Models.Proveedor", "Proveedor")
-                        .WithMany()
-                        .HasForeignKey("IdProveedor")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Proveedor");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.CuentaPorCobrar", b =>
                 {
                     b.HasOne("NicaplusApi.Models.Cliente", "Cliente")
@@ -826,25 +531,6 @@ namespace NicaplusApi.Migrations
                     b.Navigation("Proveedor");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.DetalleCompraProveedor", b =>
-                {
-                    b.HasOne("NicaplusApi.Models.CompraProveedor", "Compra")
-                        .WithMany("Detalles")
-                        .HasForeignKey("IdCompraProveedor")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("NicaplusApi.Models.Producto", "Producto")
-                        .WithMany()
-                        .HasForeignKey("IdProducto")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Compra");
-
-                    b.Navigation("Producto");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.DetalleVenta", b =>
                 {
                     b.HasOne("NicaplusApi.Models.Producto", "Producto")
@@ -864,40 +550,6 @@ namespace NicaplusApi.Migrations
                     b.Navigation("Venta");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.GarantiaTicket", b =>
-                {
-                    b.HasOne("NicaplusApi.Models.Cliente", "Cliente")
-                        .WithMany()
-                        .HasForeignKey("IdCliente")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("NicaplusApi.Models.Usuario", "Responsable")
-                        .WithMany()
-                        .HasForeignKey("IdUsuarioResponsable")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Cliente");
-
-                    b.Navigation("Responsable");
-                });
-
-            modelBuilder.Entity("NicaplusApi.Models.MovimientoCaja", b =>
-                {
-                    b.HasOne("NicaplusApi.Models.CompraProveedor", "CompraProveedor")
-                        .WithMany()
-                        .HasForeignKey("IdCompraProveedor");
-
-                    b.HasOne("NicaplusApi.Models.Venta", "Venta")
-                        .WithMany()
-                        .HasForeignKey("IdVenta");
-
-                    b.Navigation("CompraProveedor");
-
-                    b.Navigation("Venta");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.OrdenServicio", b =>
                 {
                     b.HasOne("NicaplusApi.Models.Cliente", "Cliente")
@@ -913,17 +565,6 @@ namespace NicaplusApi.Migrations
                     b.Navigation("Cliente");
 
                     b.Navigation("Tecnico");
-                });
-
-            modelBuilder.Entity("NicaplusApi.Models.PerfilCuenta", b =>
-                {
-                    b.HasOne("NicaplusApi.Models.Producto", "Producto")
-                        .WithMany()
-                        .HasForeignKey("IdProducto")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Producto");
                 });
 
             modelBuilder.Entity("NicaplusApi.Models.Producto", b =>
@@ -964,17 +605,6 @@ namespace NicaplusApi.Migrations
                     b.Navigation("Producto");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.TicketSoporte", b =>
-                {
-                    b.HasOne("NicaplusApi.Models.Cliente", "Cliente")
-                        .WithMany()
-                        .HasForeignKey("IdCliente")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Cliente");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.Usuario", b =>
                 {
                     b.HasOne("NicaplusApi.Models.Rol", "Rol")
@@ -1001,11 +631,6 @@ namespace NicaplusApi.Migrations
                     b.Navigation("Cliente");
 
                     b.Navigation("Usuario");
-                });
-
-            modelBuilder.Entity("NicaplusApi.Models.CompraProveedor", b =>
-                {
-                    b.Navigation("Detalles");
                 });
 
             modelBuilder.Entity("NicaplusApi.Models.Venta", b =>

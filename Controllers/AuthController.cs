@@ -3,7 +3,10 @@ using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
 using NicaplusApi.DTOs;
 using NicaplusApi.Models;
-
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 namespace NicaplusApi.Controllers
 {
     [ApiController]
@@ -76,14 +79,23 @@ namespace NicaplusApi.Controllers
                 return Unauthorized("Credenciales de acceso incorrectas.");
             }
 
-            // Nota: Aquí se generará el JWT. Por ahora devolvemos el objeto de sesión para pruebas iniciales.
-            return Ok(new
-            {
-                id = usuario.Id,
-                nombre = usuario.Nombre,
-                username = usuario.Username,
-                rol = usuario.Rol?.NombreRol
-            });
+            // Generar Token JWT
+            var claims = new[] {
+                new Claim(ClaimTypes.NameIdentifier, usuario.Id.ToString()),
+                new Claim(ClaimTypes.Name, usuario.Username),
+                new Claim(ClaimTypes.Role, usuario.Rol?.NombreRol ?? "Ventas")
+            };
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("TU_CLAVE_SECRETA_SUPER_LARGA_DE_AL_MENOS_32_CARACTERES"));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var token = new JwtSecurityToken(
+                claims: claims,
+                expires: DateTime.Now.AddDays(1),
+                signingCredentials: creds
+            );
+
+            return Ok(new { token = new JwtSecurityTokenHandler().WriteToken(token) });
         }
     }
 }

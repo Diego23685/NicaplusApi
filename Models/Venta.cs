@@ -29,6 +29,9 @@ namespace NicaplusApi.Models
         public Cliente? Cliente { get; set; }
         
         public ICollection<DetalleVenta> Detalles { get; set; } = new List<DetalleVenta>();
+
+        [NotMapped]
+        public DateTime? FechaVencimientoCreditoManual { get; set; }
     }
 
     public class DetalleVenta

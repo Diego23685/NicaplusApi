@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NicaplusApi.Data;
 
@@ -11,9 +12,11 @@ using NicaplusApi.Data;
 namespace NicaplusApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260706051757_SistemaContabilidadMovimientosCaja")]
+    partial class SistemaContabilidadMovimientosCaja
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,37 +24,6 @@ namespace NicaplusApi.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
-
-            modelBuilder.Entity("LogAuditoria", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Accion")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("Detalles")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<DateTime>("FechaRegistro")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("IdUsuario")
-                        .HasColumnType("int");
-
-                    b.Property<string>("TablaAfectada")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("LogsAuditoria");
-                });
 
             modelBuilder.Entity("NicaplusApi.Models.Categoria", b =>
                 {
@@ -610,22 +582,17 @@ namespace NicaplusApi.Migrations
                         new
                         {
                             Id = 1,
-                            NombreRol = "Administrador"
+                            NombreRol = "Admin"
                         },
                         new
                         {
                             Id = 2,
-                            NombreRol = "Socio"
+                            NombreRol = "Cajero"
                         },
                         new
                         {
                             Id = 3,
-                            NombreRol = "Ventas"
-                        },
-                        new
-                        {
-                            Id = 4,
-                            NombreRol = "Soporte"
+                            NombreRol = "Técnico"
                         });
                 });
 
