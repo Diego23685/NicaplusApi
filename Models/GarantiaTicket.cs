@@ -39,6 +39,11 @@ namespace NicaplusApi.Models
         [ForeignKey("IdUsuarioResponsable")]
         public Usuario? Responsable { get; set; }
 
+        public int? IdProducto { get; set; }
+
+        [ForeignKey("IdProducto")]
+        public Producto? Producto { get; set; }
+
         // En Models/GarantiaTicket.cs
         public string Estado { get; set; } = "Pendiente"; // Valor por defecto
     }

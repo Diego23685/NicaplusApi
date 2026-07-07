@@ -51,19 +51,25 @@ namespace NicaplusApi.Controllers
                         if (prod.EsSuscripcion)
                         {
                             if (!venta.IdCliente.HasValue || venta.IdCliente.Value == 0)
-                                return BadRequest($"El producto '{prod.Nombre}' requiere un cliente asociado.");
+                                return BadRequest($"Operación Denegada: El producto '{prod.Nombre}' requiere obligatoriamente un cliente asociado.");
 
-                            // Lógica de Perfiles
+                            // Lógica de Perfiles: Buscar el siguiente perfil disponible en el pool
                             var perfilDisponible = await _context.PerfilesCuentas
                                 .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && !p.Ocupado);
 
-                            if (perfilDisponible != null)
+                            // ◄ VALIDACIÓN CRÍTICA INYECTADA: Si es null, bloquea la venta de inmediato
+                            if (perfilDisponible == null)
                             {
-                                perfilDisponible.Ocupado = true;
-                                perfilDisponible.IdClienteAsignado = venta.IdCliente.Value;
-                                _context.PerfilesCuentas.Update(perfilDisponible);
-                                detalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN} | Acceso: {perfilDisponible.CorreoCuenta} / {perfilDisponible.PasswordCuenta}";
+                                return BadRequest($"Acción Denegada: No quedan pantallas disponibles en el pool para '{prod.Nombre}'. Ingrese más perfiles en el catálogo antes de facturar.");
                             }
+
+                            // Si pasó la validación, procedemos con la asignación segura
+                            perfilDisponible.Ocupado = true;
+                            perfilDisponible.IdClienteAsignado = venta.IdCliente.Value;
+                            _context.PerfilesCuentas.Update(perfilDisponible);
+
+                            // Formatear los accesos exactos para la trazabilidad de la factura
+                            detalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN} | Acceso: {perfilDisponible.CorreoCuenta} / {perfilDisponible.PasswordCuenta}";
 
                             var nuevaSuscripcion = new Suscripcion
                             {

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
 using NicaplusApi.Models;
+using NicaplusApi.Services;
 
 namespace NicaplusApi.Controllers
 {
@@ -10,10 +11,12 @@ namespace NicaplusApi.Controllers
     public class OrdenesServicioController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly IWhatsAppService _whatsappService;
 
-        public OrdenesServicioController(ApplicationDbContext context)
+        public OrdenesServicioController(ApplicationDbContext context, IWhatsAppService whatsappService)
         {
             _context = context;
+            _whatsappService = whatsappService;
         }
 
         // 1. Obtener todas las órdenes de servicio activas
@@ -44,36 +47,39 @@ namespace NicaplusApi.Controllers
         [HttpPut("{id}/estado")]
         public async Task<IActionResult> ActualizarEstado(int id, [FromQuery] string nuevoEstado, [FromBody] string? notas)
         {
-            var orden = await _context.OrdenesServicio.FindAsync(id);
-            if (orden == null)
-            {
-                return NotFound("La orden de servicio no existe.");
-            }
+            // Necesitamos Incluir al Cliente para tener su Nombre y Teléfono
+            var orden = await _context.OrdenesServicio.Include(o => o.Cliente).FirstOrDefaultAsync(o => o.Id == id);
+            if (orden == null) return NotFound("La orden de servicio no existe.");
 
             var estadosValidos = new[] { "Recibido", "En Revisión", "Listo", "Entregado" };
-            if (!estadosValidos.Contains(nuevoEstado))
-            {
-                return BadRequest("Estado de servicio no válido.");
-            }
+            if (!estadosValidos.Contains(nuevoEstado)) return BadRequest("Estado de servicio no válido.");
 
+            string estadoAnterior = orden.Estado;
             orden.Estado = nuevoEstado;
             
-            // CORREGIDO: Cambiado de 'notes' a 'notas' para que coincida con el parámetro
-            if (notas != null)
-            {
-                orden.Notas = notas;
-            }
-
-            if (nuevoEstado == "Entregado")
-            {
-                orden.FechaEntrega = DateTime.UtcNow;
-            }
+            if (notas != null) orden.Notas = notas;
+            if (nuevoEstado == "Entregado") orden.FechaEntrega = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
+
+            // ⚡ DISPARADOR AUTOMÁTICO DE WHATSAPP: CAMBIO A "LISTO"
+            if (nuevoEstado == "Listo" && estadoAnterior != "Listo" && orden.Cliente != null)
+            {
+                var variables = new Dictionary<string, string>
+                {
+                    { "cliente", orden.Cliente.Nombre },
+                    { "dispositivo", orden.Dispositivo },
+                    { "id", orden.Id.ToString() }
+                };
+                
+                // Dispara en segundo plano sin ralentizar la API
+                await _whatsappService.EnviarDesdePlantillaAsync("EnvioComprobante", orden.Cliente.Telefono, variables);
+            }
+
             return NoContent();
         }
 
-        // 4. Liquidar y procesar cobro automático en Ventas
+        // 4. Liquidar y procesar cobro automático en Ventas (AUTOMATIZADO ENVÍO DE TICKET)
         [HttpPut("{id}/entregar")]
         public async Task<IActionResult> EntregarEquipo(int id, [FromBody] EntregaOrdenDto dto)
         {
@@ -86,7 +92,6 @@ namespace NicaplusApi.Controllers
                 orden.Estado = "Entregado";
                 orden.Notas = $"[ENTREGA] Herramientas: {dto.HerramientasUsed}. Diagnóstico: {dto.DiagnosticoFinal}. {orden.Notas}";
 
-                // CORREGIDO: Mapeado estrictamente a 'DetalleVenta' respetando tu modelo
                 var ventaServicio = new Venta
                 {
                     IdUsuario = 1, 
@@ -98,7 +103,7 @@ namespace NicaplusApi.Controllers
                     {
                         new DetalleVenta
                         {
-                            IdProducto = 1, // Semilla en tu DB para servicios generales de taller
+                            IdProducto = 1, 
                             Cantidad = 1,
                             PrecioUnitario = dto.CostoReparacion,
                             SubTotal = dto.CostoReparacion,
@@ -110,6 +115,20 @@ namespace NicaplusApi.Controllers
                 _context.Ventas.Add(ventaServicio);
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                // ⚡ DISPARADOR AUTOMÁTICO DE WHATSAPP: ENVÍO DE COMPROBANTE TEXTO PROFESIONAL
+                if (orden.Cliente != null)
+                {
+                    var variables = new Dictionary<string, string>
+                    {
+                        { "cliente", orden.Cliente.Nombre },
+                        { "factura", $"#000{ventaServicio.Id}" },
+                        { "total", $"C$ {dto.CostoReparacion}" },
+                        { "dispositivo", orden.Dispositivo }
+                    };
+
+                    await _whatsappService.EnviarDesdePlantillaAsync("TallerListo", orden.Cliente.Telefono, variables);
+                }
 
                 return Ok(new { ventaId = ventaServicio.Id });
             }

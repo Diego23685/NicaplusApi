@@ -308,5 +308,66 @@ namespace NicaplusApi.Controllers
                     .ToListAsync()
             });
         }
+
+        [HttpGet("indicadores")]
+        [Authorize(Roles = "Administrador,Socio")]
+        public async Task<IActionResult> GetIndicadores()
+        {
+            var hoy = DateTime.UtcNow;
+
+            // 1. Clientes Activos e Inactivos
+            var clientesActivos = await _context.Suscripciones
+                .Where(s => s.Estado == "Activa")
+                .Select(s => s.IdCliente)
+                .Distinct()
+                .CountAsync();
+
+            var totalClientes = await _context.Clientes.CountAsync();
+            var clientesInactivos = totalClientes - clientesActivos;
+
+            // 2. Renovaciones Exitosas vs Perdidas
+            var renovacionesExitosas = await _context.Suscripciones.CountAsync(s => s.Estado == "Activa");
+            var renovacionesPerdidas = await _context.Suscripciones.CountAsync(s => s.Estado == "Cancelada" || s.Estado == "Vencida");
+
+            // 3. Servicios Vendidos y Utilidad Total
+            var serviciosVendidos = await _context.DetallesVentas.CountAsync();
+            
+            var totalVentas = await _context.Ventas.SumAsync(v => v.Total);
+            var totalCosto = await _context.DetallesVentas
+                .Include(d => d.Producto)
+                .SumAsync(d => (d.Producto != null ? d.Producto.PrecioCosto : 0) * d.Cantidad);
+            
+            var utilidad = totalVentas - totalCosto;
+
+            // 4. Proveedor con Mayor Margen
+            var proveedorMargen = await _context.Productos
+                .Where(p => !string.IsNullOrEmpty(p.Proveedor))
+                .GroupBy(p => p.Proveedor)
+                .Select(g => new {
+                    Proveedor = g.Key,
+                    MargenPromedio = g.Average(p => p.PrecioVenta - p.PrecioCosto)
+                })
+                .OrderByDescending(x => x.MargenPromedio)
+                .FirstOrDefaultAsync();
+
+            // 5. Proveedor con Más Reclamos (Basado en Garantias)
+            var proveedorReclamos = await _context.GarantiasTickets
+                .Include(g => g.Producto) // Asegúrate de que GarantiaTicket tenga relación con Producto si aplica, o busca a través de la cuenta base
+                .GroupBy(g => g.CuentaAnterior) // O por el campo identificador del proveedor asignado
+                .Select(g => new { Identificador = g.Key, Total = g.Count() })
+                .OrderByDescending(x => x.Total)
+                .FirstOrDefaultAsync();
+
+            return Ok(new {
+                clientesActivos,
+                clientesInactivos,
+                renovacionesExitosas,
+                renovacionesPerdidas,
+                serviciosVendidos,
+                utilidad,
+                proveedorConMayorMargen = proveedorMargen?.Proveedor ?? "N/A",
+                proveedorConMasReclamos = proveedorReclamos?.Identificador ?? "N/A"
+            });
+        }
     }
 }

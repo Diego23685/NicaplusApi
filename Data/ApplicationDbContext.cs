@@ -41,6 +41,8 @@ namespace NicaplusApi.Data
         public DbSet<MovimientoCaja> MovimientosCaja { get; set; }
         public DbSet<LogAuditoria> LogsAuditoria { get; set; }
 
+        public DbSet<ConfiguracionMensaje> ConfiguracionesMensajes { get; set; }
+
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
             // 1. Obtener el ID del usuario desde el Token JWT o Sesión

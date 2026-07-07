@@ -4,11 +4,14 @@ using Microsoft.IdentityModel.Tokens;
 using NicaplusApi.Data;
 using System.Text;
 using Microsoft.OpenApi.Models;
+using NicaplusApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // 1. Servicios Básicos
 builder.Services.AddHttpContextAccessor();
+
+builder.Services.AddHttpClient<IWhatsAppService, WhatsAppService>();
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseMySql(
