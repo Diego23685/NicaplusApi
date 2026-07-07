@@ -28,14 +28,31 @@ namespace NicaplusApi.Controllers
         }
 
         // 1. GET: api/perfilescuentas/producto/{idProducto}
-        // Devuelve las pantallas/perfiles asociados a un servicio de streaming específico
+        // Devuelve las pantallas/perfiles asociados a un servicio con el nombre del cliente incluido
         [HttpGet("producto/{idProducto}")]
-        public async Task<ActionResult<IEnumerable<PerfilCuenta>>> GetPerfilesPorProducto(int idProducto)
+        public async Task<IActionResult> GetPerfilesPorProducto(int idProducto)
         {
-            return await _context.PerfilesCuentas
+            var perfiles = await _context.PerfilesCuentas
                 .Where(p => p.IdProducto == idProducto)
                 .OrderBy(p => p.NombrePerfil)
+                .Select(p => new
+                {
+                    p.Id,
+                    p.IdProducto,
+                    p.NombrePerfil,
+                    p.PIN,
+                    p.CorreoCuenta,
+                    p.PasswordCuenta,
+                    p.Ocupado,
+                    p.IdClienteAsignado,
+                    // Buscamos el nombre del cliente en caliente si está asignado
+                    NombreCliente = p.IdClienteAsignado.HasValue 
+                        ? _context.Clientes.Where(c => c.Id == p.IdClienteAsignado.Value).Select(c => c.Nombre).FirstOrDefault() 
+                        : "Disponible"
+                })
                 .ToListAsync();
+
+            return Ok(perfiles);
         }
 
         // 2. POST: api/perfilescuentas
