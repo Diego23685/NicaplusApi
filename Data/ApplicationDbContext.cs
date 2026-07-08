@@ -7,14 +7,13 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 
 namespace NicaplusApi.Data
 {
     public class ApplicationDbContext : DbContext
     {
         private readonly IHttpContextAccessor _httpContextAccessor;
-        
-        // Zona horaria estándar para Nicaragua
         private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) 
@@ -49,12 +48,13 @@ namespace NicaplusApi.Data
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
+            // 1. Captura segura de usuario
             var userIdString = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             var userName = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.Name)?.Value ?? "Usuario del Sistema";
             
-            // Calculamos la hora exacta de Nicaragua una sola vez antes del bucle
             var ahoraNicaragua = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
 
+            // 2. Capturar las modificaciones ANTES de alterar el tracker
             var entradasModificadas = ChangeTracker.Entries()
                 .Where(e => e.State != EntityState.Unchanged && e.Entity.GetType() != typeof(LogAuditoria))
                 .ToList(); 
@@ -62,8 +62,8 @@ namespace NicaplusApi.Data
             foreach (var entry in entradasModificadas) 
             {
                 string nombreRegistroAfectado = "N/A";
-                var datosNuevos = new Dictionary<string, object>();
-                var datosViejos = new Dictionary<string, object>();
+                var datosNuevos = new Dictionary<string, object?>();
+                var datosViejos = new Dictionary<string, object?>();
 
                 var propiedadNombre = entry.CurrentValues.Properties
                     .FirstOrDefault(p => p.Name.ToLower() == "nombre" || p.Name.ToLower() == "razonsocial");
@@ -77,14 +77,14 @@ namespace NicaplusApi.Data
                 {
                     foreach (var prop in entry.CurrentValues.Properties)
                     {
-                        datosNuevos[prop.Name] = entry.CurrentValues[prop.Name] ?? DBNull.Value;
+                        datosNuevos[prop.Name] = entry.CurrentValues[prop.Name];
                     }
                 }
                 if (entry.State == EntityState.Modified || entry.State == EntityState.Deleted)
                 {
                     foreach (var prop in entry.OriginalValues.Properties)
                     {
-                        datosViejos[prop.Name] = entry.OriginalValues[prop.Name] ?? DBNull.Value;
+                        datosViejos[prop.Name] = entry.OriginalValues[prop.Name];
                     }
                 }
 
@@ -96,15 +96,20 @@ namespace NicaplusApi.Data
                     ValoresAnteriores = datosViejos
                 };
 
-                LogsAuditoria.Add(new LogAuditoria {
+                // 3. CREACIÓN DIRECTA EN EL TRACKER
+                // Usar Entry().State asegura que EF inserte la entidad en el comando SQL actual que se está preparando
+                var nuevoLog = new LogAuditoria {
                     IdUsuario = userIdString != null ? int.Parse(userIdString) : 0,
                     Accion = entry.State.ToString(),
                     TablaAfectada = entry.Entity.GetType().Name,
                     Detalles = JsonSerializer.Serialize(metadataDetalle),
-                    FechaRegistro = ahoraNicaragua // ◄ CORREGIDO: Ahora guarda la hora de Nicaragua
-                });
+                    FechaRegistro = DateTime.SpecifyKind(ahoraNicaragua, DateTimeKind.Unspecified)
+                };
+
+                Entry(nuevoLog).State = EntityState.Added;
             }
             
+            // 4. Ejecutar el guardado único de todo lo que está en el tracker
             return await base.SaveChangesAsync(ct);
         }
 
@@ -148,6 +153,11 @@ namespace NicaplusApi.Data
                 .WithMany(s => s.Ventas)
                 .HasForeignKey(v => v.IdSuscripcion)
                 .OnDelete(DeleteBehavior.Restrict);
+
+                // Fuerza a EF a enviar el valor de la fecha directamente en el comando INSERT
+            modelBuilder.Entity<LogAuditoria>()
+                .Property(l => l.FechaRegistro)
+                .ValueGeneratedNever(); // ◄ EVITA QUE LA BD ASUMA VALORES POR DEFECTO
         }
     }
 }
