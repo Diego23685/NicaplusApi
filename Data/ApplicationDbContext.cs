@@ -125,6 +125,12 @@ namespace NicaplusApi.Data
                 entity.Property(p => p.Descripcion).HasMaxLength(500);
                 entity.Property(p => p.ImagenUrl).HasColumnType("longtext"); 
             });
+
+            modelBuilder.Entity<Suscripcion>()
+                .HasOne(s => s.PerfilCuenta)
+                .WithMany(p => p.Suscripciones)
+                .HasForeignKey(s => s.IdPerfilCuenta)
+                .OnDelete(DeleteBehavior.SetNull);
         }
     }
 }

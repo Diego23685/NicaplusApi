@@ -15,5 +15,6 @@ namespace NicaplusApi.Models
         
         [ForeignKey("IdProducto")]
         public Producto? Producto { get; set; }
+        public ICollection<Suscripcion> Suscripciones { get; set; } = new List<Suscripcion>();
     }
 }

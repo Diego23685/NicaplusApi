@@ -95,6 +95,7 @@ namespace NicaplusApi.Controllers
 
             // 6. Consultar Suscripciones recurrentes (Netflix, Licencias, etc.)
             var todasSuscripciones = await _context.Suscripciones
+                .Include(s => s.PerfilCuenta)
                 .Where(s => s.IdCliente == id)
                 .OrderByDescending(s => s.FechaVencimiento)
                 .ToListAsync();
@@ -109,7 +110,17 @@ namespace NicaplusApi.Controllers
 
                 SuscripcionesVigentes = todasSuscripciones
                     .Where(s => s.Estado == "Activa" && s.FechaVencimiento >= DateTime.UtcNow)
-                    .Select(s => new { s.Id, s.NombreServicio, s.TipoSuscripcion, s.FechaVencimiento, s.DetallesCredenciales })
+                    .Select(s => new
+                    {
+                        s.Id,
+                        s.NombreServicio,
+                        s.TipoSuscripcion,
+                        s.FechaVencimiento,
+
+                        DetallesCredenciales = s.PerfilCuenta != null
+                            ? $"PERFIL: {s.PerfilCuenta.NombrePerfil} | PIN: {s.PerfilCuenta.PIN} | Acceso: {s.PerfilCuenta.CorreoCuenta} / {s.PerfilCuenta.PasswordCuenta}"
+                            : s.DetallesCredenciales
+                    })
             };
 
             // 8. Segmentación de Servicios Vencidos / Históricos

@@ -51,5 +51,10 @@ namespace NicaplusApi.Models
 
         [ForeignKey("IdOrdenServicio")]
         public OrdenServicio? OrdenServicio { get; set; }
+
+        public int? IdPerfilCuenta { get; set; }
+
+        public PerfilCuenta? PerfilCuenta { get; set; }
+        
     }
 }
