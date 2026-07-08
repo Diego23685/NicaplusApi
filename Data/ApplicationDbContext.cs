@@ -13,6 +13,9 @@ namespace NicaplusApi.Data
     public class ApplicationDbContext : DbContext
     {
         private readonly IHttpContextAccessor _httpContextAccessor;
+        
+        // Zona horaria estándar para Nicaragua
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) 
             : base(options)
@@ -46,11 +49,12 @@ namespace NicaplusApi.Data
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
-            // 1. Obtener el ID del usuario desde el Token JWT o Sesión
             var userIdString = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            // Intentar obtener también el Nombre del usuario si lo guardaste en los Claims del Token
             var userName = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.Name)?.Value ?? "Usuario del Sistema";
             
+            // Calculamos la hora exacta de Nicaragua una sola vez antes del bucle
+            var ahoraNicaragua = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
+
             var entradasModificadas = ChangeTracker.Entries()
                 .Where(e => e.State != EntityState.Unchanged && e.Entity.GetType() != typeof(LogAuditoria))
                 .ToList(); 
@@ -61,7 +65,6 @@ namespace NicaplusApi.Data
                 var datosNuevos = new Dictionary<string, object>();
                 var datosViejos = new Dictionary<string, object>();
 
-                // Buscar si la entidad tiene alguna propiedad que actúe como "Nombre" o "Descripción" para identificarla
                 var propiedadNombre = entry.CurrentValues.Properties
                     .FirstOrDefault(p => p.Name.ToLower() == "nombre" || p.Name.ToLower() == "razonsocial");
 
@@ -70,12 +73,10 @@ namespace NicaplusApi.Data
                     nombreRegistroAfectado = entry.CurrentValues[propiedadNombre]?.ToString() ?? "Sin nombre";
                 }
 
-                // Capturar los valores (útil para auditorías avanzadas)
                 if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
                 {
                     foreach (var prop in entry.CurrentValues.Properties)
                     {
-                        // CORRECCIÓN: Controlamos el valor nulo usando DBNull.Value para el diccionario
                         datosNuevos[prop.Name] = entry.CurrentValues[prop.Name] ?? DBNull.Value;
                     }
                 }
@@ -83,12 +84,10 @@ namespace NicaplusApi.Data
                 {
                     foreach (var prop in entry.OriginalValues.Properties)
                     {
-                        // CORRECCIÓN: Controlamos el valor nulo usando DBNull.Value para el diccionario
                         datosViejos[prop.Name] = entry.OriginalValues[prop.Name] ?? DBNull.Value;
                     }
                 }
 
-                // Estructuramos un JSON limpio para la columna Detalles
                 var metadataDetalle = new
                 {
                     UsuarioNombre = userName,
@@ -101,9 +100,8 @@ namespace NicaplusApi.Data
                     IdUsuario = userIdString != null ? int.Parse(userIdString) : 0,
                     Accion = entry.State.ToString(),
                     TablaAfectada = entry.Entity.GetType().Name,
-                    // Serializamos la estructura a string JSON
                     Detalles = JsonSerializer.Serialize(metadataDetalle),
-                    FechaRegistro = DateTime.UtcNow // Sincronizado a UTC con tus otros modelos
+                    FechaRegistro = ahoraNicaragua // ◄ CORREGIDO: Ahora guarda la hora de Nicaragua
                 });
             }
             
@@ -139,31 +137,17 @@ namespace NicaplusApi.Data
                 .HasForeignKey(r => r.IdSuscripcion)
                 .OnDelete(DeleteBehavior.Restrict);
 
-
             modelBuilder.Entity<Renovacion>()
                 .HasOne(r => r.Cliente)
                 .WithMany()
                 .HasForeignKey(r => r.IdCliente)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            modelBuilder.Entity<Renovacion>()
-                .HasOne(r => r.Suscripcion)
-                .WithMany()
-                .HasForeignKey(r => r.IdSuscripcion)
+            modelBuilder.Entity<Venta>()
+                .HasOne(v => v.Suscripcion)
+                .WithMany(s => s.Ventas)
+                .HasForeignKey(v => v.IdSuscripcion)
                 .OnDelete(DeleteBehavior.Restrict);
-
-
-            modelBuilder.Entity<Renovacion>()
-                .HasOne(r => r.Cliente)
-                .WithMany()
-                .HasForeignKey(r => r.IdCliente)
-                .OnDelete(DeleteBehavior.Restrict);
-
-                modelBuilder.Entity<Venta>()
-                    .HasOne(v => v.Suscripcion)
-                    .WithMany(s => s.Ventas)
-                    .HasForeignKey(v => v.IdSuscripcion)
-                    .OnDelete(DeleteBehavior.Restrict);
         }
     }
 }

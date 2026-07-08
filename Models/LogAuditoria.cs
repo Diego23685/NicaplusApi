@@ -1,6 +1,5 @@
 using System;
 using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
 
 namespace NicaplusApi.Models
 {
@@ -10,20 +9,27 @@ namespace NicaplusApi.Models
         public int Id { get; set; }
 
         [Required]
-        public int IdUsuario { get; set; } // ¿Quién lo hizo?
+        public int IdUsuario { get; set; }
 
         [Required]
         [StringLength(50)]
-        public string Accion { get; set; } = string.Empty; // "CREAR", "EDITAR", "BORRAR", "LOGIN"
+        public string Accion { get; set; } = string.Empty;
 
         [Required]
         [StringLength(100)]
-        public string TablaAfectada { get; set; } = string.Empty; // "CLIENTE", "VENTA", "PRODUCTO"
+        public string TablaAfectada { get; set; } = string.Empty;
 
         [Required]
-        public string Detalles { get; set; } = string.Empty; // "Julian creó cliente X"
+        public string Detalles { get; set; } = string.Empty;
 
         [Required]
-        public DateTime FechaRegistro { get; set; } = DateTime.UtcNow; // Ajustado a UTC para consistencia
+        public DateTime FechaRegistro { get; set; }
+
+        public LogAuditoria()
+        {
+            // CORREGIDO: Garantiza que cualquier instancia nueva tome la hora de Nicaragua por defecto
+            var zonaNica = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+            FechaRegistro = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zonaNica);
+        }
     }
 }
