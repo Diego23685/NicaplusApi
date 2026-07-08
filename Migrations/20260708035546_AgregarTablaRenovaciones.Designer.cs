@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NicaplusApi.Data;
 
@@ -11,9 +12,11 @@ using NicaplusApi.Data;
 namespace NicaplusApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260708035546_AgregarTablaRenovaciones")]
+    partial class AgregarTablaRenovaciones
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,42 +24,6 @@ namespace NicaplusApi.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
-
-            modelBuilder.Entity("NicaplusApi.Models.Cancelacion", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int?>("ClienteId")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("FechaCancelacion")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("IdCliente")
-                        .HasColumnType("int");
-
-                    b.Property<int>("IdSuscripcion")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Motivo")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int?>("SuscripcionId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ClienteId");
-
-                    b.HasIndex("SuscripcionId");
-
-                    b.ToTable("Cancelaciones");
-                });
 
             modelBuilder.Entity("NicaplusApi.Models.Categoria", b =>
                 {
@@ -449,9 +416,6 @@ namespace NicaplusApi.Migrations
                     b.Property<int?>("IdCompraProveedor")
                         .HasColumnType("int");
 
-                    b.Property<int?>("IdRenovacion")
-                        .HasColumnType("int");
-
                     b.Property<int?>("IdVenta")
                         .HasColumnType("int");
 
@@ -534,12 +498,6 @@ namespace NicaplusApi.Migrations
                     b.Property<string>("EstadoPerfil")
                         .IsRequired()
                         .HasColumnType("longtext");
-
-                    b.Property<DateTime?>("FechaAsignacion")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<DateTime?>("FechaLiberacion")
-                        .HasColumnType("datetime(6)");
 
                     b.Property<int?>("IdClienteAsignado")
                         .HasColumnType("int");
@@ -929,21 +887,6 @@ namespace NicaplusApi.Migrations
                     b.ToTable("Ventas");
                 });
 
-            modelBuilder.Entity("NicaplusApi.Models.Cancelacion", b =>
-                {
-                    b.HasOne("NicaplusApi.Models.Cliente", "Cliente")
-                        .WithMany()
-                        .HasForeignKey("ClienteId");
-
-                    b.HasOne("NicaplusApi.Models.Suscripcion", "Suscripcion")
-                        .WithMany()
-                        .HasForeignKey("SuscripcionId");
-
-                    b.Navigation("Cliente");
-
-                    b.Navigation("Suscripcion");
-                });
-
             modelBuilder.Entity("NicaplusApi.Models.CompraProveedor", b =>
                 {
                     b.HasOne("NicaplusApi.Models.Proveedor", "Proveedor")
@@ -1103,13 +1046,13 @@ namespace NicaplusApi.Migrations
                     b.HasOne("NicaplusApi.Models.Cliente", "Cliente")
                         .WithMany()
                         .HasForeignKey("IdCliente")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("NicaplusApi.Models.Suscripcion", "Suscripcion")
                         .WithMany()
                         .HasForeignKey("IdSuscripcion")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("Cliente");

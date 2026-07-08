@@ -35,5 +35,6 @@ namespace NicaplusApi.Models
 
         [ForeignKey("IdCompraProveedor")]
         public CompraProveedor? CompraProveedor { get; set; }
+        public int? IdRenovacion { get; set; }
     }
 }

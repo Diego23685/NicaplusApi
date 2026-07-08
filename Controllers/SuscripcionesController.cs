@@ -95,9 +95,12 @@ namespace NicaplusApi.Controllers
             var suscripcion = await _context.Suscripciones
                 .Include(s => s.Cliente)
                 .Include(s => s.Producto)
+                .Include(s => s.PerfilCuenta)
                 .FirstOrDefaultAsync(s => s.Id == id);
 
-            if (suscripcion == null) return NotFound("Suscripción no encontrada.");
+            if (suscripcion == null)
+                return NotFound("Suscripción no encontrada.");
+
             return Ok(suscripcion);
         }
 

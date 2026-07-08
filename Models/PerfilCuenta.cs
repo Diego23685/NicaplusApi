@@ -12,6 +12,9 @@ namespace NicaplusApi.Models
         public string PasswordCuenta { get; set; } = string.Empty; // Contraseña base de la cuenta
         public bool Ocupado { get; set; } = false;
         public int? IdClienteAsignado { get; set; } // Nullable si está libre
+        public string EstadoPerfil { get; set; } = "Disponible";
+        public DateTime? FechaAsignacion {get;set;}
+        public DateTime? FechaLiberacion {get;set;}
         
         [ForeignKey("IdProducto")]
         public Producto? Producto { get; set; }

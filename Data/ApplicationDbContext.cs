@@ -40,8 +40,9 @@ namespace NicaplusApi.Data
         public DbSet<GarantiaTicket> GarantiasTickets { get; set; }
         public DbSet<MovimientoCaja> MovimientosCaja { get; set; }
         public DbSet<LogAuditoria> LogsAuditoria { get; set; }
-
         public DbSet<ConfiguracionMensaje> ConfiguracionesMensajes { get; set; }
+        public DbSet<Renovacion> Renovaciones { get; set; }
+        public DbSet<Cancelacion> Cancelaciones { get; set; }
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
@@ -131,6 +132,32 @@ namespace NicaplusApi.Data
                 .WithMany(p => p.Suscripciones)
                 .HasForeignKey(s => s.IdPerfilCuenta)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<Renovacion>()
+                .HasOne(r => r.Suscripcion)
+                .WithMany()
+                .HasForeignKey(r => r.IdSuscripcion)
+                .OnDelete(DeleteBehavior.Restrict);
+
+
+            modelBuilder.Entity<Renovacion>()
+                .HasOne(r => r.Cliente)
+                .WithMany()
+                .HasForeignKey(r => r.IdCliente)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<Renovacion>()
+                .HasOne(r => r.Suscripcion)
+                .WithMany()
+                .HasForeignKey(r => r.IdSuscripcion)
+                .OnDelete(DeleteBehavior.Restrict);
+
+
+            modelBuilder.Entity<Renovacion>()
+                .HasOne(r => r.Cliente)
+                .WithMany()
+                .HasForeignKey(r => r.IdCliente)
+                .OnDelete(DeleteBehavior.Restrict);
         }
     }
 }
