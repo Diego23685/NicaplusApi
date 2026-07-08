@@ -33,10 +33,10 @@ namespace NicaplusApi.Controllers
             // CASO 2: Búsqueda de Cuentas / Perfiles (Muestra cuentas ligadas al término, ej: "Netflix")
             var perfilesCuentas = await _context.PerfilesCuentas
                 .Include(p => p.Producto)
-                .Where(p => p.Producto.Nombre.ToLower().Contains(query) || p.CorreoCuenta.ToLower().Contains(query))
+                .Where(p => p.Producto!.Nombre.ToLower().Contains(query) || p.CorreoCuenta.ToLower().Contains(query))
                 .Select(p => new {
                     Tipo = "Cuenta/Perfil",
-                    Servicio = p.Producto.Nombre,
+                    Servicio = p.Producto!.Nombre,
                     p.NombrePerfil,
                     p.CorreoCuenta,
                     p.Ocupado,

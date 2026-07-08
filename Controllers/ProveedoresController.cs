@@ -82,6 +82,62 @@ namespace NicaplusApi.Controllers
             return Ok(proveedor);
         }
 
+        [HttpPut("{id}")]
+        public async Task<IActionResult> Put(int id, [FromBody] Proveedor proveedor)
+        {
+            if (id != proveedor.Id)
+                return BadRequest();
+
+            _context.Entry(proveedor).State = EntityState.Modified;
+
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch
+            {
+                return NotFound();
+            }
+
+            return NoContent();
+        }
+
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            var proveedor = await _context.Proveedores.FindAsync(id);
+
+            if (proveedor == null)
+                return NotFound();
+
+            // En lugar de AnyAsync, buscamos las compras reales para enviarlas al cliente
+            var comprasAsociadas = await _context.ComprasProveedores
+                .Where(c => c.IdProveedor == id)
+                .Select(c => new 
+                {
+                    c.Id,
+                    Fecha = c.FechaCompra,
+                    Total = c.TotalCompra
+                })
+                .ToListAsync();
+
+            if (comprasAsociadas.Any())
+            {
+                // Retornamos un objeto estructurado con el mensaje y la lista de conflictos
+                return BadRequest(new
+                {
+                    error = "Restricción de integridad",
+                    mensaje = "No puede eliminarse el proveedor porque tiene compras registradas en el sistema.",
+                    compras = comprasAsociadas
+                });
+            }
+
+            _context.Proveedores.Remove(proveedor);
+            await _context.SaveChangesAsync();
+
+            return NoContent();
+        }
+
         // POST: api/Proveedores/compras (Registrar Ingreso/Compra Física que suma stock)
         // POST: api/Proveedores/compras (Registrar Ingreso/Compra Física que suma stock)
         [HttpPost("compras")]

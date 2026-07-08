@@ -105,7 +105,7 @@ namespace NicaplusApi.Controllers
                 {
                     var nuevaCuentaCobrar = new CuentaPorCobrar
                     {
-                        IdCliente = venta.IdCliente.Value,
+                        IdCliente = venta.IdCliente!.Value,
                         IdVenta = venta.Id,
                         MontoTotal = venta.Total,
                         SaldoPendiente = venta.Total,
