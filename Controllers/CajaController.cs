@@ -14,10 +14,19 @@ namespace NicaplusApi.Controllers
     public class CajaController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        
+        // Zona horaria estándar para Nicaragua (CST - UTC-6)
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public CajaController(ApplicationDbContext context)
         {
             _context = context;
+        }
+
+        // Función auxiliar para obtener la hora exacta de Nicaragua
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
         }
 
         // GET: api/Caja/movimientos
@@ -27,11 +36,21 @@ namespace NicaplusApi.Controllers
             return Ok(await _context.MovimientosCaja.OrderByDescending(m => m.Fecha).ToListAsync());
         }
 
-        // POST: api/Caja/movimientos (Para registrar Gastos o Ingresos manuales)
+        // POST: api/Caja/movimientos
         [HttpPost("movimientos")]
         public async Task<ActionResult<MovimientoCaja>> Post([FromBody] MovimientoCaja movimiento)
         {
-            if (movimiento.Fecha == default) movimiento.Fecha = DateTime.UtcNow;
+            // Si el frontend no manda fecha, se le asigna la hora exacta de Nicaragua, no UTC ni EE.UU.
+            if (movimiento.Fecha == default) 
+            {
+                movimiento.Fecha = GetNicaraguaTime();
+            }
+            else 
+            {
+                // Si el frontend envía la fecha manual (p.ej. "2026-07-07"), aseguramos que se tome como tal
+                movimiento.Fecha = movimiento.Fecha.Date; 
+            }
+
             _context.MovimientosCaja.Add(movimiento);
             await _context.SaveChangesAsync();
             return Ok(movimiento);
@@ -41,32 +60,40 @@ namespace NicaplusApi.Controllers
         [HttpGet("reporte-utilidades")]
         public async Task<IActionResult> GetReporteUtilidades()
         {
-            var hoy = DateTime.Now.Date;
-            var inicioMes = new DateTime(hoy.Year, hoy.Month, 1);
+            // 1. Definir los puntos cronológicos basados estrictamente en Nicaragua
+            var hoyNicaragua = GetNicaraguaTime().Date;
+            var inicioMesNicaragua = new DateTime(hoyNicaragua.Year, hoyNicaragua.Month, 1);
+            var mañanaNicaragua = hoyNicaragua.AddDays(1);
 
-            var movimientos = await _context.MovimientosCaja.ToListAsync();
-            var ventasDetalles = await _context.Ventas.Include(v => v.Detalles).ThenInclude(d => d.Producto).ToListAsync();
+            // 2. FILTRAR DIRECTO EN BASE DE DATOS (Eficiencia de rendimiento crítico)
+            var movimientosMes = await _context.MovimientosCaja
+                .Where(m => m.Fecha >= inicioMesNicaragua && m.Fecha < mañanaNicaragua)
+                .ToListAsync();
 
-            // 1. CÁLCULOS DEL DÍA
-            var movsHoy = movimientos.Where(m => m.Fecha.Date == hoy).ToList();
+            var ventasMes = await _context.Ventas
+                .Include(v => v.Detalles)
+                .ThenInclude(d => d.Producto)
+                .Where(v => v.FechaVenta >= inicioMesNicaragua && v.FechaVenta < mañanaNicaragua)
+                .ToListAsync();
+
+            // 3. CÁLCULOS DEL DÍA (Filtrado en memoria sobre el subset optimizado)
+            var movsHoy = movimientosMes.Where(m => m.Fecha.Date == hoyNicaragua).ToList();
             decimal ingresosDia = movsHoy.Where(m => m.Tipo == "Ingreso").Sum(m => m.Monto);
             decimal egresosDia = movsHoy.Where(m => m.Tipo == "Egreso").Sum(m => m.Monto);
             decimal comprasDia = movsHoy.Where(m => m.Concepto == "Compra Proveedor").Sum(m => m.Monto);
             decimal gastosDia = movsHoy.Where(m => m.Concepto == "Gasto Ordinario").Sum(m => m.Monto);
 
-            // Utilidad Real Diaria (PrecioVenta - PrecioCosto) de lo facturado hoy menos gastos
-            decimal utilidadDiaria = ventasDetalles.Where(v => v.FechaVenta.Date == hoy)
+            decimal utilidadDiaria = ventasMes.Where(v => v.FechaVenta.Date == hoyNicaragua)
                 .SelectMany(v => v.Detalles)
                 .Sum(d => d.Producto != null ? (d.PrecioUnitario - d.Producto.PrecioCosto) * d.Cantidad : d.SubTotal) - gastosDia;
 
-            // 2. CÁLCULOS DEL MES
-            var movsMes = movimientos.Where(m => m.Fecha.Date >= inicioMes).ToList();
-            decimal ingresosMes = movsMes.Where(m => m.Tipo == "Ingreso").Sum(m => m.Monto);
-            decimal egresosMes = movsMes.Where(m => m.Tipo == "Egreso").Sum(m => m.Monto);
-            decimal comprasMes = movsMes.Where(m => m.Concepto == "Compra Proveedor").Sum(m => m.Monto);
-            decimal gastosMes = movsMes.Where(m => m.Concepto == "Gasto Ordinario").Sum(m => m.Monto);
+            // 4. CÁLCULOS DEL MES
+            decimal ingresosMes = movimientosMes.Where(m => m.Tipo == "Ingreso").Sum(m => m.Monto);
+            decimal egresosMes = movimientosMes.Where(m => m.Tipo == "Egreso").Sum(m => m.Monto);
+            decimal comprasMes = movimientosMes.Where(m => m.Concepto == "Compra Proveedor").Sum(m => m.Monto);
+            decimal gastosMes = movimientosMes.Where(m => m.Concepto == "Gasto Ordinario").Sum(m => m.Monto);
 
-            decimal utilidadMensual = ventasDetalles.Where(v => v.FechaVenta.Date >= inicioMes)
+            decimal utilidadMensual = ventasMes
                 .SelectMany(v => v.Detalles)
                 .Sum(d => d.Producto != null ? (d.PrecioUnitario - d.Producto.PrecioCosto) * d.Cantidad : d.SubTotal) - gastosMes;
 

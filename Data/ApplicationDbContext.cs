@@ -158,6 +158,12 @@ namespace NicaplusApi.Data
                 .WithMany()
                 .HasForeignKey(r => r.IdCliente)
                 .OnDelete(DeleteBehavior.Restrict);
+
+                modelBuilder.Entity<Venta>()
+                    .HasOne(v => v.Suscripcion)
+                    .WithMany(s => s.Ventas)
+                    .HasForeignKey(v => v.IdSuscripcion)
+                    .OnDelete(DeleteBehavior.Restrict);
         }
     }
 }

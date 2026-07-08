@@ -3,6 +3,10 @@ using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
 using NicaplusApi.Models;
 using Microsoft.AspNetCore.Authorization;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace NicaplusApi.Controllers
 {
@@ -11,7 +15,16 @@ namespace NicaplusApi.Controllers
     public class VentasController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        
+        // Zona horaria estándar para Nicaragua
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+
         public VentasController(ApplicationDbContext context) { _context = context; }
+
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
+        }
 
         [HttpGet]
         [Authorize(Roles = "Administrador,Socio,Ventas")]
@@ -24,9 +37,12 @@ namespace NicaplusApi.Controllers
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
+                var ahoraNicaragua = GetNicaraguaTime();
+
+                // CORREGIDO: Forzar hora local comercial de Nicaragua
                 if (venta.FechaVenta == default(DateTime) || venta.FechaVenta.Year == 1)
                 {
-                    venta.FechaVenta = DateTime.UtcNow;
+                    venta.FechaVenta = ahoraNicaragua;
                 }
 
                 // 1. Guardar la venta inicial para generar el ID automático
@@ -39,7 +55,7 @@ namespace NicaplusApi.Controllers
                     var prod = await _context.Productos.FindAsync(detalle.IdProducto);
                     if (prod != null)
                     {
-                        // Control de inventario
+                        // Control de inventario (Físicos)
                         if (!prod.EsDigital && !prod.RequiereServicio)
                         {
                             if (prod.StockActual < detalle.Cantidad)
@@ -47,30 +63,28 @@ namespace NicaplusApi.Controllers
                             prod.StockActual -= detalle.Cantidad;
                         }
 
-                        // Lógica de Suscripciones
+                        // Lógica de Suscripciones (Streaming, Licencias)
                         if (prod.EsSuscripcion)
                         {
                             if (!venta.IdCliente.HasValue || venta.IdCliente.Value == 0)
                                 return BadRequest($"Operación Denegada: El producto '{prod.Nombre}' requiere obligatoriamente un cliente asociado.");
 
-                            // Lógica de Perfiles: Buscar el siguiente perfil disponible en el pool
+                            // Pool de perfiles
                             var perfilDisponible = await _context.PerfilesCuentas
                                 .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && !p.Ocupado);
 
-                            // ◄ VALIDACIÓN CRÍTICA INYECTADA: Si es null, bloquea la venta de inmediato
                             if (perfilDisponible == null)
                             {
                                 return BadRequest($"Acción Denegada: No quedan pantallas disponibles en el pool para '{prod.Nombre}'. Ingrese más perfiles en el catálogo antes de facturar.");
                             }
 
-                            // Si pasó la validación, procedemos con la asignación segura
                             perfilDisponible.Ocupado = true;
                             perfilDisponible.IdClienteAsignado = venta.IdCliente.Value;
                             _context.PerfilesCuentas.Update(perfilDisponible);
 
-                            // Formatear los accesos exactos para la trazabilidad de la factura
                             detalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN} | Acceso: {perfilDisponible.CorreoCuenta} / {perfilDisponible.PasswordCuenta}";
 
+                            // CORREGIDO: La suscripción hereda los tiempos limpios del huso local del negocio
                             var nuevaSuscripcion = new Suscripcion
                             {
                                 IdCliente = venta.IdCliente.Value,
@@ -89,7 +103,7 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 3. Registrar Movimiento de Caja (Ahora venta.Id existe)
+                // 3. Registrar Movimiento de Caja sincronizado al día real
                 var ingresoCaja = new MovimientoCaja
                 {
                     Fecha = venta.FechaVenta,
@@ -101,7 +115,7 @@ namespace NicaplusApi.Controllers
                 };
                 _context.MovimientosCaja.Add(ingresoCaja);
 
-                // 4. Control de Crédito
+                // 4. Control de Crédito atado al mismo eje de tiempo
                 if (venta.MetodoPago == "Crédito")
                 {
                     var nuevaCuentaCobrar = new CuentaPorCobrar
@@ -156,7 +170,6 @@ namespace NicaplusApi.Controllers
                 ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
                 ventaOriginal.IdCliente = ventaActualizada.IdCliente;
 
-                // CORREGIDO: Remoción limpia de detalles desde la colección sin requerir DbSet explícito
                 _context.RemoveRange(ventaOriginal.Detalles);
 
                 // 3. DESCONTAR EL NUEVO STOCK E INYECTAR NUEVOS DETALLES

@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NicaplusApi.Data;
 
@@ -11,9 +12,11 @@ using NicaplusApi.Data;
 namespace NicaplusApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260708050208_AgregarRelacionVentaSuscripcion")]
+    partial class AgregarRelacionVentaSuscripcion
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1181,9 +1184,8 @@ namespace NicaplusApi.Migrations
                         .HasForeignKey("IdCliente");
 
                     b.HasOne("NicaplusApi.Models.Suscripcion", "Suscripcion")
-                        .WithMany("Ventas")
-                        .HasForeignKey("IdSuscripcion")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .WithMany()
+                        .HasForeignKey("IdSuscripcion");
 
                     b.HasOne("NicaplusApi.Models.Usuario", "Usuario")
                         .WithMany()
@@ -1206,11 +1208,6 @@ namespace NicaplusApi.Migrations
             modelBuilder.Entity("NicaplusApi.Models.PerfilCuenta", b =>
                 {
                     b.Navigation("Suscripciones");
-                });
-
-            modelBuilder.Entity("NicaplusApi.Models.Suscripcion", b =>
-                {
-                    b.Navigation("Ventas");
                 });
 
             modelBuilder.Entity("NicaplusApi.Models.Venta", b =>

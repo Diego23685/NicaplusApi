@@ -3,6 +3,10 @@ using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
 using NicaplusApi.Models;
 using NicaplusApi.Services;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace NicaplusApi.Controllers
 {
@@ -13,10 +17,18 @@ namespace NicaplusApi.Controllers
         private readonly ApplicationDbContext _context;
         private readonly IWhatsAppService _whatsappService;
 
+        // Zona horaria estándar para Nicaragua
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+
         public OrdenesServicioController(ApplicationDbContext context, IWhatsAppService whatsappService)
         {
             _context = context;
             _whatsappService = whatsappService;
+        }
+
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
         }
 
         // 1. Obtener todas las órdenes de servicio activas
@@ -34,7 +46,8 @@ namespace NicaplusApi.Controllers
         [HttpPost]
         public async Task<ActionResult<OrdenServicio>> CrearOrden([FromBody] OrdenServicio orden)
         {
-            orden.FechaIngreso = DateTime.UtcNow;
+            // Corregido: Hora local de Nicaragua para el ingreso al taller
+            orden.FechaIngreso = GetNicaraguaTime();
             orden.Estado = "Recibido";
 
             _context.OrdenesServicio.Add(orden);
@@ -43,11 +56,9 @@ namespace NicaplusApi.Controllers
             return CreatedAtAction(nameof(GetOrdenes), new { id = orden.Id }, orden);
         }
 
-        // 3. Actualizar el estado o diagnóstico de una orden
         [HttpPut("{id}/estado")]
         public async Task<IActionResult> ActualizarEstado(int id, [FromQuery] string nuevoEstado, [FromBody] string? notas)
         {
-            // Necesitamos Incluir al Cliente para tener su Nombre y Teléfono
             var orden = await _context.OrdenesServicio.Include(o => o.Cliente).FirstOrDefaultAsync(o => o.Id == id);
             if (orden == null) return NotFound("La orden de servicio no existe.");
 
@@ -57,12 +68,19 @@ namespace NicaplusApi.Controllers
             string estadoAnterior = orden.Estado;
             orden.Estado = nuevoEstado;
             
-            if (notas != null) orden.Notas = notas;
-            if (nuevoEstado == "Entregado") orden.FechaEntrega = DateTime.UtcNow;
+            // CORREGIDO: Uso de variable correcta 'notas' y prevención de asignación nula
+            if (!string.IsNullOrWhiteSpace(notas)) 
+            {
+                orden.Notas = notas;
+            }
+
+            if (nuevoEstado == "Entregado") 
+            {
+                orden.FechaEntrega = GetNicaraguaTime();
+            }
 
             await _context.SaveChangesAsync();
 
-            // ⚡ DISPARADOR AUTOMÁTICO DE WHATSAPP: CAMBIO A "LISTO"
             if (nuevoEstado == "Listo" && estadoAnterior != "Listo" && orden.Cliente != null)
             {
                 var variables = new Dictionary<string, string>
@@ -72,24 +90,25 @@ namespace NicaplusApi.Controllers
                     { "id", orden.Id.ToString() }
                 };
                 
-                // Dispara en segundo plano sin ralentizar la API
                 await _whatsappService.EnviarDesdePlantillaAsync("EnvioComprobante", orden.Cliente.Telefono, variables);
             }
 
             return NoContent();
         }
 
-        // 4. Liquidar y procesar cobro automático en Ventas (AUTOMATIZADO ENVÍO DE TICKET)
         [HttpPut("{id}/entregar")]
         public async Task<IActionResult> EntregarEquipo(int id, [FromBody] EntregaOrdenDto dto)
         {
             var orden = await _context.OrdenesServicio.Include(o => o.Cliente).FirstOrDefaultAsync(o => o.Id == id);
-            if (orden == null) return NotFound();
+            if (orden == null) return NotFound("La orden de servicio no existe.");
 
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
+                var ahoraNicaragua = GetNicaraguaTime();
+
                 orden.Estado = "Entregado";
+                orden.FechaEntrega = ahoraNicaragua;
                 orden.Notas = $"[ENTREGA] Herramientas: {dto.HerramientasUsed}. Diagnóstico: {dto.DiagnosticoFinal}. {orden.Notas}";
 
                 var ventaServicio = new Venta
@@ -97,17 +116,19 @@ namespace NicaplusApi.Controllers
                     IdUsuario = 1, 
                     IdCliente = orden.IdCliente,
                     MetodoPago = "Efectivo",
-                    FechaVenta = DateTime.Now, 
+                    FechaVenta = ahoraNicaragua, 
                     Total = dto.CostoReparacion,
                     Detalles = new List<DetalleVenta>
                     {
                         new DetalleVenta
                         {
+                            // CORREGIDO: Volvemos a asignar un ID numérico (1) para evitar el error de tipo por valor no nulable (int). 
+                            // Asegúrate de que el ID 1 represente un servicio general o soporte en tu tabla de Productos.
                             IdProducto = 1, 
                             Cantidad = 1,
                             PrecioUnitario = dto.CostoReparacion,
                             SubTotal = dto.CostoReparacion,
-                            MetadataDigital = $"Equipo: {orden.Dispositivo}"
+                            MetadataDigital = $"Taller - Equipo: {orden.Dispositivo}"
                         }
                     }
                 };
@@ -116,7 +137,6 @@ namespace NicaplusApi.Controllers
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                // ⚡ DISPARADOR AUTOMÁTICO DE WHATSAPP: ENVÍO DE COMPROBANTE TEXTO PROFESIONAL
                 if (orden.Cliente != null)
                 {
                     var variables = new Dictionary<string, string>
@@ -132,17 +152,17 @@ namespace NicaplusApi.Controllers
 
                 return Ok(new { ventaId = ventaServicio.Id });
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, "Error en cascada al liquidar orden e inyectar cobro.");
+                return StatusCode(500, $"Error en cascada al liquidar orden: {ex.Message}");
             }
         }
         
         public class EntregaOrdenDto
         {
             public required string DiagnosticoFinal { get; set; }
-            public required string HerramientasUsed { get; set; } // CORREGIDO: Añadido required para quitar advertencia CS8618
+            public required string HerramientasUsed { get; set; } 
             public decimal CostoReparacion { get; set; }
         }
     }

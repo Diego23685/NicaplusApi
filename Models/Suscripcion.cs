@@ -55,6 +55,7 @@ namespace NicaplusApi.Models
         public int? IdPerfilCuenta { get; set; }
 
         public PerfilCuenta? PerfilCuenta { get; set; }
+        public ICollection<Venta> Ventas { get; set; } = new List<Venta>();
         
     }
 }

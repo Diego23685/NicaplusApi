@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Security.Claims;
 
 namespace NicaplusApi.Controllers
 {
@@ -14,10 +15,16 @@ namespace NicaplusApi.Controllers
     public class SuscripcionesController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public SuscripcionesController(ApplicationDbContext context)
         {
             _context = context;
+        }
+
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
         }
 
         // GET: api/suscripciones
@@ -35,7 +42,9 @@ namespace NicaplusApi.Controllers
         [HttpGet("alertas")]
         public async Task<IActionResult> GetAlertasRenovacion()
         {
-            var hoy = DateTime.Now;
+            // CORREGIDO: Evaluamos estrictamente con la fecha de hoy en Nicaragua
+            var hoyNicaragua = GetNicaraguaTime().Date;
+            
             var suscripciones = await _context.Suscripciones
                 .Include(s => s.Cliente)
                 .Where(s => s.Estado != "Cancelada")
@@ -45,12 +54,12 @@ namespace NicaplusApi.Controllers
 
             var listaConAlertas = suscripciones.Select(s =>
             {
-                TimeSpan diferencia = s.FechaVencimiento.Date - hoy.Date;
+                // Aseguramos que la comparación sea Date contra Date bajo el mismo huso horario
+                TimeSpan diferencia = s.FechaVencimiento.Date - hoyNicaragua;
                 int diasRestantes = diferencia.Days;
 
                 string alertaFiltro = "Normal";
                 
-                // Lógica de automatización de estados y marcas de vencimiento
                 if (diasRestantes < 0)
                 {
                     alertaFiltro = "Vencido";
@@ -104,18 +113,90 @@ namespace NicaplusApi.Controllers
             return Ok(suscripcion);
         }
 
+        // POST: api/suscripciones (Altas iniciales de servicios)
         [HttpPost]
         public async Task<ActionResult<Suscripcion>> Post([FromBody] Suscripcion suscripcion)
         {
-            if (suscripcion.FechaInicio == default)
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
             {
-                suscripcion.FechaInicio = DateTime.UtcNow;
+                var ahoraNicaragua = GetNicaraguaTime();
+
+                // CORREGIDO: Fecha de alta atada a tu zona comercial local
+                if (suscripcion.FechaInicio == default)
+                {
+                    suscripcion.FechaInicio = ahoraNicaragua;
+                }
+
+                if (suscripcion.FechaVencimiento == default)
+                {
+                    suscripcion.FechaVencimiento = suscripcion.FechaInicio.AddDays(30);
+                }
+
+                _context.Suscripciones.Add(suscripcion);
+                await _context.SaveChangesAsync();
+
+                // 2. Crear venta inicial amarrada al mismo eje temporal
+                var venta = new Venta
+                {
+                    FechaVenta = suscripcion.FechaInicio,
+                    IdCliente = suscripcion.IdCliente,
+                    IdUsuario = 1, // Fallback controlado
+                    IdSuscripcion = suscripcion.Id,
+                    Total = suscripcion.CostoRenovacion,
+                    MetodoPago = "Efectivo"
+                };
+
+                _context.Ventas.Add(venta);
+                await _context.SaveChangesAsync();
+
+                // 3. Crear detalle de venta
+                if (suscripcion.IdProducto.HasValue)
+                {
+                    var detalle = new DetalleVenta
+                    {
+                        IdVenta = venta.Id,
+                        IdProducto = suscripcion.IdProducto.Value,
+                        Cantidad = 1,
+                        PrecioUnitario = suscripcion.CostoRenovacion,
+                        SubTotal = suscripcion.CostoRenovacion
+                    };
+
+                    _context.DetallesVentas.Add(detalle);
+                    await _context.SaveChangesAsync();
+                }
+
+                // 4. Registrar movimiento de caja perfectamente sincronizado
+                var movimiento = new MovimientoCaja
+                {
+                    Fecha = suscripcion.FechaInicio,
+                    Tipo = "Ingreso",
+                    Concepto = "Venta Suscripcion",
+                    Monto = suscripcion.CostoRenovacion,
+                    Detalle = $"Alta inicial {suscripcion.NombreServicio} | Cliente ID: {suscripcion.IdCliente}",
+                    IdVenta = venta.Id
+                };
+
+                _context.MovimientosCaja.Add(movimiento);
+                await _context.SaveChangesAsync();
+
+                await transaction.CommitAsync();
+
+                return CreatedAtAction(
+                    nameof(GetById),
+                    new { id = suscripcion.Id },
+                    new
+                    {
+                        mensaje = "Suscripción creada correctamente.",
+                        idSuscripcion = suscripcion.Id,
+                        idVenta = venta.Id
+                    });
             }
-
-            _context.Suscripciones.Add(suscripcion);
-            await _context.SaveChangesAsync();
-
-            return CreatedAtAction(nameof(GetById), new { id = suscripcion.Id }, suscripcion);
+            catch(Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return StatusCode(500, $"Error creando suscripción: {ex.Message}");
+            }
         }
 
         [HttpPut("{id}")]

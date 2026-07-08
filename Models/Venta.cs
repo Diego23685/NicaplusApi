@@ -32,6 +32,11 @@ namespace NicaplusApi.Models
 
         [NotMapped]
         public DateTime? FechaVencimientoCreditoManual { get; set; }
+
+        public int? IdSuscripcion { get; set; }
+
+        [ForeignKey("IdSuscripcion")]
+        public Suscripcion? Suscripcion { get; set; }
     }
 
     public class DetalleVenta

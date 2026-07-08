@@ -14,10 +14,18 @@ namespace NicaplusApi.Controllers
     public class TicketsSoporteController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        
+        // Zona horaria estándar para Nicaragua
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public TicketsSoporteController(ApplicationDbContext context)
         {
             _context = context;
+        }
+
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
         }
 
         // GET: api/TicketsSoporte
@@ -46,7 +54,8 @@ namespace NicaplusApi.Controllers
         [HttpPost]
         public async Task<ActionResult<TicketSoporte>> Post([FromBody] TicketSoporte ticket)
         {
-            ticket.FechaCreacion = DateTime.UtcNow;
+            // Corregido: Fecha de apertura en tiempo real local
+            ticket.FechaCreacion = GetNicaraguaTime();
             ticket.Estado = "Pendiente";
 
             _context.TicketsSoporte.Add(ticket);
@@ -68,9 +77,10 @@ namespace NicaplusApi.Controllers
             ticket.Estado = nuevoEstado;
             ticket.NotasResolucion = notas;
 
+            // Corregido: Cierre de ticket bajo el mismo huso horario local
             if (nuevoEstado == "Resuelto")
             {
-                ticket.FechaResolucion = DateTime.UtcNow;
+                ticket.FechaResolucion = GetNicaraguaTime();
             }
 
             await _context.SaveChangesAsync();

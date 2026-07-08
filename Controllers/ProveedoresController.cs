@@ -14,10 +14,18 @@ namespace NicaplusApi.Controllers
     public class ProveedoresController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        
+        // Zona horaria estándar para Nicaragua
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public ProveedoresController(ApplicationDbContext context)
         {
             _context = context;
+        }
+
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
         }
 
         // GET: api/Proveedores
@@ -27,50 +35,53 @@ namespace NicaplusApi.Controllers
             return Ok(await _context.Proveedores.OrderBy(p => p.RazonSocial).ToListAsync());
         }
 
-        // GET: api/Proveedores/analisis-rendimiento (Métricas CRM de rentabilidad y cumplimiento)
+        // GET: api/Proveedores/analisis-rendimiento (Métricas CRM optimizadas en Base de Datos)
         [HttpGet("analisis-rendimiento")]
         public async Task<IActionResult> GetAnalisisRendimiento()
         {
-            var proveedores = await _context.Proveedores.ToListAsync();
-            var compras = await _context.ComprasProveedores.Include(c => c.Detalles).ThenInclude(d => d.Producto).ToListAsync();
-
-            var reporte = proveedores.Select(p =>
-            {
-                var comprasDelProveedor = compras.Where(c => c.IdProveedor == p.Id).ToList();
-                
-                int totalOrdenes = comprasDelProveedor.Count;
-                decimal totalInvertido = comprasDelProveedor.Sum(c => c.TotalCompra);
-                
-                // Promedio de días que tarda en responder/entregar
-                double tiempoRespuestaPromedio = totalOrdenes > 0 
-                    ? comprasDelProveedor.Average(c => c.TiempoEntregaRealDias) 
-                    : 0;
-
-                // Margen promedio generado por los productos de este proveedor
-                decimal margenGananciaHistorico = comprasDelProveedor
-                    .SelectMany(c => c.Detalles)
-                    .Sum(d => d.Producto != null ? (d.Producto.PrecioVenta - d.CostoUnitario) * d.Cantidad : 0);
-
-                // Confiabilidad estimada en porcentaje base
-                double scoreConfiabilidad = 100;
-                if (tiempoRespuestaPromedio > 5) scoreConfiabilidad -= 20;
-                if (tiempoRespuestaPromedio > 10) scoreConfiabilidad -= 30;
-                if (totalOrdenes == 0) scoreConfiabilidad = 0;
-
-                return new
+            // CORREGIDO: La proyección Select mapea y calcula directo en SQL, no en memoria RAM.
+            var reporte = await _context.Proveedores
+                .Select(p => new
                 {
                     p.Id,
                     p.RazonSocial,
                     p.Telefono,
-                    TotalOrdenes = totalOrdenes,
-                    TotalInvertido = totalInvertido,
-                    MargenGananciaHistorico = margenGananciaHistorico,
-                    TiempoRespuestaPromedio = Math.Round(tiempoRespuestaPromedio, 1),
-                    ScoreConfiabilidad = scoreConfiabilidad // % Confiabilidad
+                    TotalOrdenes = _context.ComprasProveedores.Count(c => c.IdProveedor == p.Id),
+                    TotalInvertido = _context.ComprasProveedores.Where(c => c.IdProveedor == p.Id).Sum(c => c.TotalCompra),
+                    
+                    TiempoRespuestaPromedio = _context.ComprasProveedores.Where(c => c.IdProveedor == p.Id).Any()
+                        ? _context.ComprasProveedores.Where(c => c.IdProveedor == p.Id).Average(c => c.TiempoEntregaRealDias)
+                        : 0,
+
+                    MargenGananciaHistorico = _context.ComprasProveedores
+                        .Where(c => c.IdProveedor == p.Id)
+                        .SelectMany(c => c.Detalles)
+                        .Sum(d => d.Producto != null ? (d.Producto.PrecioVenta - d.CostoUnitario) * d.Cantidad : 0)
+                })
+                .ToListAsync();
+
+            // Evaluamos el Score de Confiabilidad y redondeos en memoria sobre el resultado final optimizado
+            var resultadoFinal = reporte.Select(r =>
+            {
+                double scoreConfiabilidad = 100;
+                if (r.TiempoRespuestaPromedio > 5) scoreConfiabilidad -= 20;
+                if (r.TiempoRespuestaPromedio > 10) scoreConfiabilidad -= 30;
+                if (r.TotalOrdenes == 0) scoreConfiabilidad = 0;
+
+                return new
+                {
+                    r.Id,
+                    r.RazonSocial,
+                    r.Telefono,
+                    r.TotalOrdenes,
+                    r.TotalInvertido,
+                    r.MargenGananciaHistorico,
+                    TiempoRespuestaPromedio = Math.Round(r.TiempoRespuestaPromedio, 1),
+                    ScoreConfiabilidad = scoreConfiabilidad
                 };
             }).OrderByDescending(r => r.MargenGananciaHistorico).ToList();
 
-            return Ok(reporte);
+            return Ok(resultadoFinal);
         }
 
         // POST: api/Proveedores (Crear Proveedor)
@@ -90,14 +101,8 @@ namespace NicaplusApi.Controllers
 
             _context.Entry(proveedor).State = EntityState.Modified;
 
-            try
-            {
-                await _context.SaveChangesAsync();
-            }
-            catch
-            {
-                return NotFound();
-            }
+            try { await _context.SaveChangesAsync(); }
+            catch { return NotFound(); }
 
             return NoContent();
         }
@@ -106,24 +111,15 @@ namespace NicaplusApi.Controllers
         public async Task<IActionResult> Delete(int id)
         {
             var proveedor = await _context.Proveedores.FindAsync(id);
+            if (proveedor == null) return NotFound();
 
-            if (proveedor == null)
-                return NotFound();
-
-            // En lugar de AnyAsync, buscamos las compras reales para enviarlas al cliente
             var comprasAsociadas = await _context.ComprasProveedores
                 .Where(c => c.IdProveedor == id)
-                .Select(c => new 
-                {
-                    c.Id,
-                    Fecha = c.FechaCompra,
-                    Total = c.TotalCompra
-                })
+                .Select(c => new { c.Id, Fecha = c.FechaCompra, Total = c.TotalCompra })
                 .ToListAsync();
 
             if (comprasAsociadas.Any())
             {
-                // Retornamos un objeto estructurado con el mensaje y la lista de conflictos
                 return BadRequest(new
                 {
                     error = "Restricción de integridad",
@@ -134,19 +130,20 @@ namespace NicaplusApi.Controllers
 
             _context.Proveedores.Remove(proveedor);
             await _context.SaveChangesAsync();
-
             return NoContent();
         }
 
-        // POST: api/Proveedores/compras (Registrar Ingreso/Compra Física que suma stock)
-        // POST: api/Proveedores/compras (Registrar Ingreso/Compra Física que suma stock)
+        // POST: api/Proveedores/compras
         [HttpPost("compras")]
         public async Task<IActionResult> RegistrarCompra([FromBody] CompraProveedor compra)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                compra.FechaCompra = DateTime.UtcNow;
+                var ahoraNicaragua = GetNicaraguaTime();
+
+                // CORREGIDO: Seteamos la hora exacta de Nicaragua para la compra física
+                compra.FechaCompra = ahoraNicaragua;
                 _context.ComprasProveedores.Add(compra);
 
                 foreach (var detalle in compra.Detalles)
@@ -154,7 +151,6 @@ namespace NicaplusApi.Controllers
                     var producto = await _context.Productos.FindAsync(detalle.IdProducto);
                     if (producto != null)
                     {
-                        // Lógica de Negocio: Sumar al stock físico e inyectar el nuevo costo de adquisición
                         producto.StockActual += detalle.Cantidad;
                         producto.PrecioCosto = detalle.CostoUnitario;
                         producto.GarantiaDias = detalle.GarantiaDiasPactada;
@@ -162,16 +158,14 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // Registrar de manera automatizada el Egreso en la Caja Contable por reabastecimiento de Lote
+                // CORREGIDO: El egreso contable se amarra a la misma línea temporal de Nicaragua
                 var egresoCaja = new MovimientoCaja
                 {
-                    Fecha = compra.FechaCompra,
+                    Fecha = ahoraNicaragua,
                     Tipo = "Egreso",
                     Concepto = "Compra Proveedor",
                     Monto = compra.TotalCompra,
                     Detalle = $"Adquisición de lote a Proveedor ID: {compra.IdProveedor}",
-                    
-                    //  CORRECCIÓN: Enlazamos el objeto completo en lugar del ID primitivo 'compra.Id'
                     CompraProveedor = compra 
                 };
                 _context.MovimientosCaja.Add(egresoCaja);
@@ -183,7 +177,6 @@ namespace NicaplusApi.Controllers
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                // Tip pro: Usar ex.InnerException?.Message ayuda a ver el error real de MySQL si vuelve a pasar algo
                 var errorDetalle = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
                 return StatusCode(500, $"Error en transaccion de inventario: {errorDetalle}");
             }

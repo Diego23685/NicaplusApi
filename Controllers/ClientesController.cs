@@ -14,10 +14,18 @@ namespace NicaplusApi.Controllers
     public class ClientesController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        
+        // Zona horaria estándar para Nicaragua
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public ClientesController(ApplicationDbContext context)
         {
             _context = context;
+        }
+
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
         }
 
         // GET: api/Clientes
@@ -27,15 +35,16 @@ namespace NicaplusApi.Controllers
             return await _context.Clientes.OrderBy(c => c.Nombre).ToListAsync();
         }
 
-        // GET: api/Clientes/{id}/historial (Módulo CRM de búsqueda e historia completa)
+        // GET: api/Clientes/{id}/historial
         [HttpGet("{id}/historial")]
         public async Task<IActionResult> GetHistorialCliente(int id)
         {
-            // 1. Validar existencia del cliente
             var cliente = await _context.Clientes.FindAsync(id);
             if (cliente == null) return NotFound("Cliente no encontrado.");
 
-            // 2. Extraer Historial de Compras detallado (Físicas, Digitales y Liquidaciones de Taller)
+            var ahoraNicaragua = GetNicaraguaTime();
+
+            // 1. Historial de Compras detallado
             var compras = await _context.Ventas
                 .Where(v => v.IdCliente == id)
                 .OrderByDescending(v => v.FechaVenta)
@@ -50,16 +59,14 @@ namespace NicaplusApi.Controllers
                         d.Cantidad, 
                         d.PrecioUnitario, 
                         d.SubTotal,
-                        // Si es un servicio o recarga, aquí vienen IDs de Free Fire, números, o el dispositivo del taller
                         d.MetadataDigital 
                     })
                 })
                 .ToListAsync();
 
-            // 3. Calcular Total Gastado histórico en caliente
             decimal totalGastado = compras.Sum(c => c.Total);
 
-            // 4. Consultar Cuentas por Cobrar (Detección de deudas y morosidad)
+            // 2. Cuentas por Cobrar (Corregido con la hora de Nicaragua)
             var deudas = await _context.CuentasPorCobrar
                 .Where(cxc => cxc.IdCliente == id)
                 .OrderByDescending(cxc => cxc.FechaVencimiento)
@@ -72,36 +79,33 @@ namespace NicaplusApi.Controllers
                     cxc.FechaEmision,
                     cxc.FechaVencimiento,
                     cxc.Estado,
-                    EsVencida = cxc.FechaVencimiento < DateTime.UtcNow && cxc.SaldoPendiente > 0
+                    EsVencida = cxc.FechaVencimiento < ahoraNicaragua && cxc.SaldoPendiente > 0
                 })
                 .ToListAsync();
 
-            // Lógica de inyección de etiquetas dinámicas (Moroso) sin alterar físicamente la BD de forma estática
             var etiquetasLista = string.IsNullOrWhiteSpace(cliente.Etiquetas) 
                 ? new List<string>() 
                 : cliente.Etiquetas.Split(',').Select(t => t.Trim()).ToList();
 
-            // Si tiene deudas vencidas o cuentas pendientes con fecha expirada, se le anexa "Moroso" en caliente
-            if (deudas.Any(d => d.EsVencida || (d.Estado == "Pendiente" && d.FechaVencimiento < DateTime.UtcNow)))
+            if (deudas.Any(d => d.EsVencida || (d.Estado == "Pendiente" && d.FechaVencimiento < ahoraNicaragua)))
             {
                 if (!etiquetasLista.Contains("Moroso")) etiquetasLista.Add("Moroso");
             }
 
-            // 5. Consultar Órdenes de Servicio del Taller Técnico
+            // 3. Órdenes de Servicio del Taller (Filtrado optimizado en BD)
             var ordenesTaller = await _context.OrdenesServicio
                 .Where(o => o.IdCliente == id)
                 .OrderByDescending(o => o.FechaIngreso)
                 .ToListAsync();
 
-            // 6. Consultar Suscripciones recurrentes (Netflix, Licencias, etc.)
+            // 4. Suscripciones recurrentes (Filtrado optimizado en BD)
             var todasSuscripciones = await _context.Suscripciones
                 .Include(s => s.PerfilCuenta)
                 .Where(s => s.IdCliente == id)
                 .OrderByDescending(s => s.FechaVencimiento)
                 .ToListAsync();
 
-            // 7. Segmentación de Servicios Activos
-            // Un servicio está ACTIVO si es un equipo en taller sin entregar O una suscripción vigente
+            // 5. Segmentación en memoria de listas ya optimizadas
             var serviciosActivos = new
             {
                 TallerEquiposEnRevision = ordenesTaller
@@ -109,22 +113,19 @@ namespace NicaplusApi.Controllers
                     .Select(o => new { o.Id, o.Dispositivo, o.Diagnostico, o.Estado, o.FechaIngreso }),
 
                 SuscripcionesVigentes = todasSuscripciones
-                    .Where(s => s.Estado == "Activa" && s.FechaVencimiento >= DateTime.UtcNow)
+                    .Where(s => s.Estado == "Activa" && s.FechaVencimiento >= ahoraNicaragua)
                     .Select(s => new
                     {
                         s.Id,
                         s.NombreServicio,
                         s.TipoSuscripcion,
                         s.FechaVencimiento,
-
                         DetallesCredenciales = s.PerfilCuenta != null
                             ? $"PERFIL: {s.PerfilCuenta.NombrePerfil} | PIN: {s.PerfilCuenta.PIN} | Acceso: {s.PerfilCuenta.CorreoCuenta} / {s.PerfilCuenta.PasswordCuenta}"
                             : s.DetallesCredenciales
                     })
             };
 
-            // 8. Segmentación de Servicios Vencidos / Históricos
-            // Un servicio está VENCIDO/HISTÓRICO si el equipo ya se entregó O la suscripción expiró/se canceló
             var serviciosVencidos = new
             {
                 TallerEquiposEntregados = ordenesTaller
@@ -132,22 +133,21 @@ namespace NicaplusApi.Controllers
                     .Select(o => new { o.Id, o.Dispositivo, o.FechaEntrega, o.Notas }),
 
                 SuscripcionesExpiradas = todasSuscripciones
-                    .Where(s => s.Estado == "Cancelada" || s.Estado == "Vencida" || s.FechaVencimiento < DateTime.UtcNow)
+                    .Where(s => s.Estado == "Cancelada" || s.Estado == "Vencida" || s.FechaVencimiento < ahoraNicaragua)
                     .Select(s => new { s.Id, s.NombreServicio, s.TipoSuscripcion, s.FechaVencimiento, s.Estado })
             };
 
-            // 9. Retorno unificado de la estructura completa del CRM
             return Ok(new
             {
                 Cliente = new
                 {
                     cliente.Id,
                     cliente.Nombre,
-                    cliente.Telefono, // WhatsApp
+                    cliente.Telefono,
                     cliente.Email,
                     cliente.FechaRegistro,
                     cliente.Observaciones,
-                    Etiquetas = string.Join(", ", etiquetasLista), // Retorna la lista con "Moroso" si aplica
+                    Etiquetas = string.Join(", ", etiquetasLista),
                     cliente.PuntosAcumulados
                 },
                 TotalGastado = totalGastado,
@@ -170,7 +170,8 @@ namespace NicaplusApi.Controllers
             var clienteExistente = await _context.Clientes.FirstOrDefaultAsync(c => c.Telefono == cliente.Telefono);
             if (clienteExistente != null) return Ok(clienteExistente);
 
-            cliente.FechaRegistro = DateTime.Now;
+            // Corregido: Usa la hora oficial del negocio (Nicaragua), no la del servidor de EE.UU.
+            cliente.FechaRegistro = GetNicaraguaTime();
             cliente.PuntosAcumulados = 0;
 
             _context.Clientes.Add(cliente);
@@ -202,21 +203,13 @@ namespace NicaplusApi.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> EliminarCliente(int id)
         {
-            // 1. Validar existencia del cliente
             var cliente = await _context.Clientes.FindAsync(id);
             if (cliente == null) return NotFound("Cliente no encontrado.");
 
-            // 2. Verificar si tiene ventas registradas y traer los datos básicos de estas
             var ventasAsociadas = await _context.Ventas
                 .Where(v => v.IdCliente == id)
                 .OrderByDescending(v => v.FechaVenta)
-                .Select(v => new 
-                {
-                    v.Id,
-                    Fecha = v.FechaVenta,
-                    v.Total,
-                    v.MetodoPago
-                })
+                .Select(v => new { v.Id, Fecha = v.FechaVenta, v.Total, v.MetodoPago })
                 .ToListAsync();
 
             if (ventasAsociadas.Any())
@@ -229,7 +222,6 @@ namespace NicaplusApi.Controllers
                 });
             }
 
-            // 3. Si no tiene ventas, proceder con el borrado físico de forma segura
             _context.Clientes.Remove(cliente);
             await _context.SaveChangesAsync();
 

@@ -11,43 +11,43 @@ namespace NicaplusApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-
-
     public class ReportesController : ControllerBase
     {
-
         private readonly ApplicationDbContext _context;
+        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public ReportesController(ApplicationDbContext context)
         {
             _context = context;
         }
 
+        private DateTime GetNicaraguaTime()
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
+        }
+
         [Authorize(Roles = "Administrador,Socio")]
         [HttpGet("personalizado")]
         public async Task<IActionResult> GetReportePersonalizado([FromQuery] DateTime desde, [FromQuery] DateTime hasta)
         {
+            // Forzamos que los límites operen bajo las fechas absolutas solicitadas
             var fechaInicio = desde.Date;
             var fechaFin = hasta.Date.AddDays(1).AddTicks(-1);
 
-            // 1. Obtener las ventas en el rango de fecha
             var ventas = await _context.Ventas
                 .Include(v => v.Usuario)
                 .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin)
                 .OrderByDescending(v => v.FechaVenta)
                 .ToListAsync();
 
-            // 2. Obtener movimientos de caja complementarios del período
             var movimientosCaja = await _context.MovimientosCaja
                 .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin)
                 .ToListAsync();
 
-            // 3. Cálculos financieros cruzados
             var totalEfectivo = ventas.Where(v => v.MetodoPago == "Efectivo").Sum(v => v.Total);
             var totalTransferencia = ventas.Where(v => v.MetodoPago == "Transferencia").Sum(v => v.Total);
             var totalTarjeta = ventas.Where(v => v.MetodoPago == "Tarjeta").Sum(v => v.Total);
             
-            // Flujos contables puros de caja
             var totalIngresosExtra = movimientosCaja.Where(m => m.Tipo == "Ingreso" && m.Concepto != "Venta").Sum(m => m.Monto);
             var totalGastosFijos = movimientosCaja.Where(m => m.Concepto == "Gasto Ordinario" || m.Concepto == "Ajuste").Sum(m => m.Monto);
             var totalComprasProveedores = movimientosCaja.Where(m => m.Concepto == "Compra Proveedor").Sum(m => m.Monto);
@@ -55,7 +55,6 @@ namespace NicaplusApi.Controllers
             var granTotalFacturado = totalEfectivo + totalTransferencia + totalTarjeta;
             var balanceNetoEfectivoCaja = (granTotalFacturado + totalIngresosExtra) - (totalGastosFijos + totalComprasProveedores);
 
-            // 4. Top Productos del período
             var topProductos = await _context.DetallesVentas
                 .Include(d => d.Producto)
                 .Where(d => d.Venta!.FechaVenta >= fechaInicio && d.Venta!.FechaVenta <= fechaFin)
@@ -70,7 +69,6 @@ namespace NicaplusApi.Controllers
                 .Take(5)
                 .ToListAsync();
 
-            // 5. Mapear listado de transacciones limpio para la tabla del PDF
             var listaTransacciones = ventas.Select(v => new {
                 v.Id,
                 Fecha = v.FechaVenta.ToString("yyyy-MM-dd HH:mm"),
@@ -81,7 +79,7 @@ namespace NicaplusApi.Controllers
 
             return Ok(new
             {
-                Rango = $"{fechaInicio:dd/MM/yyyy} al {fechaFin:dd/MM/yyyy}",
+                Rango = $"{fechaInicio:dd/MM/yyyy} al {hasta.Date:dd/MM/yyyy}",
                 VentasTotales = ventas.Count,
                 Finanzas = new { 
                     Efectivo = totalEfectivo, 
@@ -100,8 +98,9 @@ namespace NicaplusApi.Controllers
         [HttpGet("resumen-dashboard")]
         public async Task<IActionResult> GetResumenDashboard()
         {
-            var hoyUtc = DateTime.Now;
-            var hoy = hoyUtc.Date; 
+            // CORREGIDO: Todo el cálculo del tiempo corre con el huso de Nicaragua
+            var hoyNicaragua = GetNicaraguaTime();
+            var hoy = hoyNicaragua.Date; 
             var inicioMes = new DateTime(hoy.Year, hoy.Month, 1);
 
             int diasDesdeLunes = ((int)hoy.DayOfWeek - 1 + 7) % 7;
@@ -109,9 +108,14 @@ namespace NicaplusApi.Controllers
             var finSemana = inicioSemana.AddDays(7);
             var mañana = hoy.AddDays(1);
 
-            // 1. EXTRAER VENTAS Y MOVIMIENTOS SIMULTÁNEAMENTE
-            var ventasMes = await _context.Ventas.Where(v => v.FechaVenta >= inicioMes).ToListAsync();
-            var movimientosCajaMes = await _context.MovimientosCaja.Where(m => m.Fecha >= inicioMes).ToListAsync();
+            // Filtrados directos y acotados en Base de Datos para cuidar la RAM
+            var ventasMes = await _context.Ventas
+                .Where(v => v.FechaVenta >= inicioMes && v.FechaVenta < mañana)
+                .ToListAsync();
+
+            var movimientosCajaMes = await _context.MovimientosCaja
+                .Where(m => m.Fecha >= inicioMes && m.Fecha < mañana)
+                .ToListAsync();
 
             var ventasSemana = ventasMes.Where(v => v.FechaVenta >= inicioSemana && v.FechaVenta < finSemana).ToList();
             var ventasDia = ventasMes.Where(v => v.FechaVenta >= hoy && v.FechaVenta < mañana).ToList();
@@ -120,7 +124,6 @@ namespace NicaplusApi.Controllers
             var totalVentaSemana = ventasSemana.Sum(v => v.Total);
             var totalVentaMes = ventasMes.Sum(v => v.Total);
 
-            // 2. FLUJO SEMANAL DE INGRESOS (Lunes a Domingo)
             var ingresosSemana = new decimal[7];
             foreach (var venta in ventasSemana)
             {
@@ -128,33 +131,26 @@ namespace NicaplusApi.Controllers
                 ingresosSemana[indiceDia] += venta.Total;
             }
 
-            // 3. DETALLES DE VENTAS Y COSTOS DIRECTOS DE PRODUCTO
             var detallesVentasMes = await _context.DetallesVentas
                 .Include(d => d.Producto)
-                .Where(d => d.Venta!.FechaVenta >= inicioMes)
+                .Where(d => d.Venta!.FechaVenta >= inicioMes && d.Venta!.FechaVenta < mañana)
                 .ToListAsync();
 
             var totalDigitales = detallesVentasMes.Where(d => d.Producto != null && d.Producto.EsDigital).Sum(d => d.SubTotal);
             var totalSoporte = detallesVentasMes.Where(d => d.Producto != null && d.Producto.RequiereServicio).Sum(d => d.SubTotal);
             var totalFisicos = detallesVentasMes.Where(d => d.Producto != null && !d.Producto.EsDigital && !d.Producto.RequiereServicio).Sum(d => d.SubTotal);
 
-            // Costo directo de adquisición de inventarios vendidos en el mes
             var costoMercanciaVendida = detallesVentasMes.Sum(d => (d.Producto?.PrecioCosto ?? 0) * d.Cantidad);
 
-            // Extraer Gastos Operativos de la caja (Luz, internet, pérdidas por garantías)
             var gastosOperativosMes = movimientosCajaMes
                 .Where(m => m.Concepto == "Gasto Ordinario" || m.Concepto == "Ajuste")
                 .Sum(m => m.Monto);
 
-            // ◄ ANALÍTICA: Utilidad Neta Verdadera Deduciendo Gastos Operativos Reales de Caja
             var utilidadNetaRealMes = totalVentaMes - costoMercanciaVendida - gastosOperativosMes;
 
-            // 4. TICKETS ABIERTOS EN TALLER
             var ticketsAbiertos = await _context.OrdenesServicio
-                .Where(o => o.Estado != "Entregado" && o.Estado != "Cancelado")
-                .CountAsync();
+                .CountAsync(o => o.Estado != "Entregado" && o.Estado != "Cancelado");
 
-            // 5. PRODUCTOS MÁS VENDIDOS DEL MES
             var productosMasVendidos = detallesVentasMes
                 .Where(d => d.Producto != null)
                 .GroupBy(d => new { d.IdProducto, d.Producto!.Nombre })
@@ -167,7 +163,6 @@ namespace NicaplusApi.Controllers
                 .Take(5)
                 .ToList();
 
-            // 6. CLIENTES NUEVOS / TOTALES
             var clientesNuevosMes = await _context.Clientes
                 .OrderByDescending(c => c.Id)
                 .Take(5)
@@ -176,19 +171,14 @@ namespace NicaplusApi.Controllers
                 
             var cantidadClientesTotales = await _context.Clientes.CountAsync(); 
 
-            // 7. ALERTAS DE STOCK CRÍTICO
             var productosAlertaStock = await _context.Productos
-                .Where(p => p.StockActual <= p.StockMinimo)
-                .CountAsync();
+                .CountAsync(p => p.StockActual <= p.StockMinimo);
 
-            // 8. RENOVACIONES Y PÓLIZAS
             var renovacionesHoy = await _context.Suscripciones
-                .Where(s => s.Estado == "Activa" && s.FechaVencimiento.Date == hoy)
-                .CountAsync();
+                .CountAsync(s => s.Estado == "Activa" && s.FechaVencimiento.Date == hoy);
 
             var renovacionesVencidas = await _context.Suscripciones
-                .Where(s => s.FechaVencimiento.Date < hoy && s.Estado != "Cancelada")
-                .CountAsync();
+                .CountAsync(s => s.FechaVencimiento.Date < hoy && s.Estado != "Cancelada");
 
             var totalCuentasPorCobrar = await _context.CuentasPorCobrar
                 .Where(c => c.Estado == "Pendiente")
@@ -212,7 +202,6 @@ namespace NicaplusApi.Controllers
                 .Take(5)
                 .ToListAsync();
 
-            // 9. GENERACIÓN DE ALERTAS DINÁMICAS REAJUSTADAS
             var alertas = new List<string>();
             if (productosAlertaStock > 0) alertas.Add($"Hay {productosAlertaStock} productos con stock igual o inferior al mínimo.");
             if (ticketsAbiertos > 5) alertas.Add($"Sobrecarga en taller: {ticketsAbiertos} órdenes pendientes.");
@@ -223,7 +212,7 @@ namespace NicaplusApi.Controllers
                 VentasDia = totalVentaDia,
                 VentasSemana = totalVentaSemana,
                 VentasMes = totalVentaMes,
-                UtilidadMes = utilidadNetaRealMes, // Entrega la utilidad limpia deduciendo gastos operativos
+                UtilidadMes = utilidadNetaRealMes,
                 GastosOperativosMes = gastosOperativosMes,
                 RenovacionesHoy = renovacionesHoy,
                 RenovacionesVencidas = renovacionesVencidas,
@@ -244,9 +233,9 @@ namespace NicaplusApi.Controllers
         [HttpGet("analitica-ejecutiva")]
         public async Task<IActionResult> GetAnaliticaEjecutiva()
         {
-            var inicioMes = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+            var ahoraNicaragua = GetNicaraguaTime();
+            var inicioMes = new DateTime(ahoraNicaragua.Year, ahoraNicaragua.Month, 1);
             
-            // 1. Ganancia detallada por fuente
             var ventasMes = await _context.Ventas.Include(v => v.Detalles).ThenInclude(d => d.Producto)
                 .Where(v => v.FechaVenta >= inicioMes).ToListAsync();
             
@@ -255,7 +244,6 @@ namespace NicaplusApi.Controllers
                 .Select(m => new { m.Detalle, m.Monto })
                 .ToListAsync();
 
-            // 2. Ranking completo de Utilidad por Servicio
             var rankingUtilidad = ventasMes.SelectMany(v => v.Detalles)
                 .GroupBy(d => d.Producto?.Nombre ?? "Sin Producto")
                 .Select(g => new { 
@@ -266,7 +254,6 @@ namespace NicaplusApi.Controllers
                 .OrderByDescending(x => x.UtilidadTotal)
                 .ToList();
 
-            // 3. Detalle de problemas (Tickets) agrupados por tipo y cliente
             var detalleProblemas = await _context.TicketsSoporte
                 .Include(t => t.Cliente)
                 .Where(t => t.FechaCreacion >= inicioMes)
@@ -279,7 +266,6 @@ namespace NicaplusApi.Controllers
                 .OrderByDescending(x => x.Frecuencia)
                 .ToListAsync();
 
-            // 4. Detalle de Garantías
             var listaGarantias = await _context.GarantiasTickets
                 .Include(g => g.Cliente)
                 .Where(g => g.FechaRepo >= inicioMes)
@@ -303,7 +289,7 @@ namespace NicaplusApi.Controllers
                 HistorialGarantias = listaGarantias,
                 RenovacionesPerdidas = await _context.Suscripciones
                     .Include(s => s.Cliente)
-                    .Where(s => s.Estado == "Vencida" && s.FechaVencimiento < DateTime.UtcNow)
+                    .Where(s => s.Estado == "Vencida" && s.FechaVencimiento < ahoraNicaragua) // Corregido huso horario
                     .Select(s => new { s.Cliente!.Nombre, s.NombreServicio, s.FechaVencimiento })
                     .ToListAsync()
             });
@@ -313,9 +299,6 @@ namespace NicaplusApi.Controllers
         [Authorize(Roles = "Administrador,Socio")]
         public async Task<IActionResult> GetIndicadores()
         {
-            var hoy = DateTime.UtcNow;
-
-            // 1. Clientes Activos e Inactivos
             var clientesActivos = await _context.Suscripciones
                 .Where(s => s.Estado == "Activa")
                 .Select(s => s.IdCliente)
@@ -325,11 +308,9 @@ namespace NicaplusApi.Controllers
             var totalClientes = await _context.Clientes.CountAsync();
             var clientesInactivos = totalClientes - clientesActivos;
 
-            // 2. Renovaciones Exitosas vs Perdidas
             var renovacionesExitosas = await _context.Suscripciones.CountAsync(s => s.Estado == "Activa");
             var renovacionesPerdidas = await _context.Suscripciones.CountAsync(s => s.Estado == "Cancelada" || s.Estado == "Vencida");
 
-            // 3. Servicios Vendidos y Utilidad Total
             var serviciosVendidos = await _context.DetallesVentas.CountAsync();
             
             var totalVentas = await _context.Ventas.SumAsync(v => v.Total);
@@ -339,7 +320,6 @@ namespace NicaplusApi.Controllers
             
             var utilidad = totalVentas - totalCosto;
 
-            // 4. Proveedor con Mayor Margen
             var proveedorMargen = await _context.Productos
                 .Where(p => !string.IsNullOrEmpty(p.Proveedor))
                 .GroupBy(p => p.Proveedor)
@@ -350,10 +330,8 @@ namespace NicaplusApi.Controllers
                 .OrderByDescending(x => x.MargenPromedio)
                 .FirstOrDefaultAsync();
 
-            // 5. Proveedor con Más Reclamos (Basado en Garantias)
             var proveedorReclamos = await _context.GarantiasTickets
-                .Include(g => g.Producto) // Asegúrate de que GarantiaTicket tenga relación con Producto si aplica, o busca a través de la cuenta base
-                .GroupBy(g => g.CuentaAnterior) // O por el campo identificador del proveedor asignado
+                .GroupBy(g => g.CuentaAnterior) 
                 .Select(g => new { Identificador = g.Key, Total = g.Count() })
                 .OrderByDescending(x => x.Total)
                 .FirstOrDefaultAsync();
