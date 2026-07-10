@@ -151,12 +151,13 @@ namespace NicaplusApi.Controllers
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
+                // Cargamos la venta incluyendo sus detalles anteriores
                 var ventaOriginal = await _context.Ventas.Include(v => v.Detalles)
                     .FirstOrDefaultAsync(v => v.Id == id);
                 
                 if (ventaOriginal == null) return NotFound("Venta no encontrada.");
 
-                // 1. REVERSIÓN DE STOCK
+                // 1. REVERSIÓN DE STOCK FISICO ANTERIOR
                 foreach (var detalleOrig in ventaOriginal.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
@@ -166,34 +167,93 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 2. APLICAR NUEVOS VALORES FINANCIEROS
+                // 2. PURGAR LOS DETALLES VIEJOS DE LA BASE DE DATOS
+                // Esto evita que se dupliquen las relaciones idVenta en MySQL/SQL Server
+                _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
+                await _context.SaveChangesAsync(); // Limpiamos el contexto tracking
+
+                // 3. APLICAR NUEVOS VALORES DE ENCABEZADO
                 ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
                 ventaOriginal.IdCliente = ventaActualizada.IdCliente;
 
-                _context.RemoveRange(ventaOriginal.Detalles);
+                decimal nuevoTotalCalculado = 0;
 
-                // 3. DESCONTAR EL NUEVO STOCK E INYECTAR NUEVOS DETALLES
-                ventaOriginal.Detalles = ventaActualizada.Detalles;
-                foreach (var nuevoDetalle in ventaOriginal.Detalles)
+                // 4. DESCONTAR EL NUEVO STOCK E INYECTAR NUEVOS DETALLES CON ID_VENTA ASIGNADO
+                foreach (var nuevoDetalle in ventaActualizada.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(nuevoDetalle.IdProducto);
-                    if (prod != null && !prod.EsDigital && !prod.RequiereServicio)
+                    if (prod != null)
                     {
-                        if (prod.StockActual < nuevoDetalle.Cantidad)
-                            return BadRequest($"Stock insuficiente tras reajuste para: {prod.Nombre}");
-                        
-                        prod.StockActual -= nuevoDetalle.Cantidad;
+                        if (!prod.EsDigital && !prod.RequiereServicio)
+                        {
+                            if (prod.StockActual < nuevoDetalle.Cantidad)
+                                return BadRequest($"Stock insuficiente tras reajuste para: {prod.Nombre}");
+                            
+                            prod.StockActual -= nuevoDetalle.Cantidad;
+                        }
                     }
+
+                    // Forzamos que apunte a la factura correcta y sumamos al total real
+                    nuevoDetalle.IdVenta = id;
+                    nuevoDetalle.Id = 0; // Evita conflictos de llaves primarias al re-insertar
+                    nuevoTotalCalculado += nuevoDetalle.SubTotal;
+
+                    _context.DetallesVentas.Add(nuevoDetalle);
                 }
 
+                // Asignamos el nuevo total recalculado a la cabecera de la venta
+                ventaOriginal.Total = nuevoTotalCalculado;
+
+                // 5. CORRECCIÓN Y ACTUALIZACIÓN DEL MOVIMIENTO DE CAJA
+                var movimientoCaja = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
+                if (movimientoCaja != null)
+                {
+                    movimientoCaja.Monto = nuevoTotalCalculado;
+                    movimientoCaja.Detalle = $"Facturación (Corregida via Auditoría) de Orden #{id}. Método: {ventaActualizada.MetodoPago}";
+                    _context.MovimientosCaja.Update(movimientoCaja);
+                }
+
+                // 6. ACTUALIZACIÓN DE CUENTAS POR COBRAR SI FUE CRÉDITO
+                var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
+                if (ventaActualizada.MetodoPago == "Crédito")
+                {
+                    if (cpc != null)
+                    {
+                        cpc.MontoTotal = nuevoTotalCalculado;
+                        cpc.SaldoPendiente = nuevoTotalCalculado; // Ajustar si el cliente ya había abonado algo
+                        _context.CuentasPorCobrar.Update(cpc);
+                    }
+                    else
+                    {
+                        var nuevaCuentaCobrar = new CuentaPorCobrar
+                        {
+                            IdCliente = ventaActualizada.IdCliente!.Value,
+                            IdVenta = id,
+                            MontoTotal = nuevoTotalCalculado,
+                            SaldoPendiente = nuevoTotalCalculado,
+                            FechaEmision = ventaOriginal.FechaVenta,
+                            FechaVencimiento = ventaOriginal.FechaVenta.AddDays(15),
+                            Estado = "Pendiente"
+                        };
+                        _context.CuentasPorCobrar.Add(nuevaCuentaCobrar);
+                    }
+                }
+                else if (cpc != null)
+                {
+                    // Si antes era Crédito y cambió a Efectivo/Transferencia, se elimina la deuda
+                    _context.CuentasPorCobrar.Remove(cpc);
+                }
+
+                _context.Ventas.Update(ventaOriginal);
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+                
                 return NoContent();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, "Fallo al revertir o recalcular stock y flujos de caja.");
+                return StatusCode(500, $"Fallo al revertir o recalcular libros contables: {ex.Message}");
             }
         }
     }
