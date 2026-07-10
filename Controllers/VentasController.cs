@@ -92,7 +92,7 @@ namespace NicaplusApi.Controllers
                                 TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
                                 IdProducto = prod.Id,
                                 IdPerfilCuenta = perfilDisponible.Id,
-                                CostoRenovacion = prod.PrecioVenta,
+                                CostoRenovacion = detalle.PrecioUnitario,
                                 FechaInicio = venta.FechaVenta,
                                 FechaVencimiento = venta.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
                                 Estado = "Activa",

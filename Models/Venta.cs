@@ -66,5 +66,6 @@ namespace NicaplusApi.Models
 
         [ForeignKey("IdProducto")]
         public Producto? Producto { get; set; }
+        public decimal Descuento { get; set; } = 0; // Descuento aplicado a este detalle, si aplica
     }
 }
