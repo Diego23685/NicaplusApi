@@ -29,5 +29,21 @@ namespace NicaplusApi.Models
         public string Etiquetas { get; set; } = string.Empty; // Almacenado como CSV: "VIP, Moroso, Frecuente"
 
         public int PuntosAcumulados { get; set; } = 0;
+
+        public string PasswordHash { get; set; } = string.Empty; // Almacena el hash de la contraseña
+        public bool EmailConfirmado { get; set; } // Indica si el email ha sido confirmado
+        public string? TokenConfirmacion { get; set; }
+
+        public string? TokenRecuperacion { get; set; }
+
+        public DateTime? UltimoAcceso { get; set; }
+
+        public bool Activo { get; set; } = true;
+
+        public DateTime? ExpiracionTokenConfirmacion { get; set; }
+
+        public DateTime? ExpiracionTokenRecuperacion { get; set; }
+        
+
     }
 }

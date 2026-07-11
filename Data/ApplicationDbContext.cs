@@ -48,9 +48,15 @@ namespace NicaplusApi.Data
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
-            // 1. Captura segura de usuario
-            var userIdString = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            var userName = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.Name)?.Value ?? "Usuario del Sistema";
+
+            var userIdString = _httpContextAccessor.HttpContext?.User?
+                .FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            var userName = _httpContextAccessor.HttpContext?.User?
+                .FindFirst(ClaimTypes.Name)?.Value ?? "Sistema";
+
+            var tipoUsuario = _httpContextAccessor.HttpContext?.User?
+                .FindFirst("TipoUsuario")?.Value;
             
             var ahoraNicaragua = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
 
@@ -90,7 +96,12 @@ namespace NicaplusApi.Data
 
                 var metadataDetalle = new
                 {
-                    UsuarioNombre = userName,
+                    UsuarioNombre =
+                        tipoUsuario == "Cliente"
+                            ? $"Cliente: {userName}"
+                            : tipoUsuario == "Administrador"
+                                ? $"Usuario: {userName}"
+                                : "Sistema",
                     TargetNombre = nombreRegistroAfectado,
                     ValoresNuevos = datosNuevos,
                     ValoresAnteriores = datosViejos
@@ -98,12 +109,28 @@ namespace NicaplusApi.Data
 
                 // 3. CREACIÓN DIRECTA EN EL TRACKER
                 // Usar Entry().State asegura que EF inserte la entidad en el comando SQL actual que se está preparando
-                var nuevoLog = new LogAuditoria {
-                    IdUsuario = userIdString != null ? int.Parse(userIdString) : 0,
+                var nuevoLog = new LogAuditoria
+                {
+                    IdUsuario = tipoUsuario == "Administrador"
+                        ? int.Parse(userIdString!)
+                        : null,
+
+                    IdCliente = tipoUsuario == "Cliente"
+                        ? int.Parse(userIdString!)
+                        : null,
+
+                    TipoActor = tipoUsuario ?? "Sistema",
+
                     Accion = entry.State.ToString(),
+
                     TablaAfectada = entry.Entity.GetType().Name,
+
                     Detalles = JsonSerializer.Serialize(metadataDetalle),
-                    FechaRegistro = DateTime.SpecifyKind(ahoraNicaragua, DateTimeKind.Unspecified)
+
+                    FechaRegistro = DateTime.SpecifyKind(
+                        ahoraNicaragua,
+                        DateTimeKind.Unspecified
+                    )
                 };
 
                 Entry(nuevoLog).State = EntityState.Added;

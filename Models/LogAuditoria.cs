@@ -9,7 +9,12 @@ namespace NicaplusApi.Models
         public int Id { get; set; }
 
         [Required]
-        public int IdUsuario { get; set; }
+        public int? IdUsuario { get; set; }
+
+        public int? IdCliente { get; set; }
+
+        [Required]
+        public string TipoActor { get; set; } = string.Empty;
 
         [Required]
         [StringLength(50)]
