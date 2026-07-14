@@ -182,7 +182,7 @@ namespace NicaplusApi.Controllers
             public required string HerramientasUsed { get; set; } 
             public decimal CostoReparacion { get; set; }
             public string MetodoPago { get; set; } = "Efectivo"; // ◄ NUEVO
-            public int IdProductoServicio { get; set; } = 1;      // ◄ NUEVO: Dinámico desde el Front
+            public int IdProductoServicio { get; set; } = 3;      // ◄ NUEVO: Dinámico desde el Front
         }
     }
 }
