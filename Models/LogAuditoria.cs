@@ -8,7 +8,7 @@ namespace NicaplusApi.Models
         [Key]
         public int Id { get; set; }
 
-        [Required]
+        // Si la tabla permite nulos, quitamos [Required]. Si no los permite, cambia a: public int IdUsuario { get; set; }
         public int? IdUsuario { get; set; }
 
         public int? IdCliente { get; set; }
@@ -24,15 +24,14 @@ namespace NicaplusApi.Models
         [StringLength(100)]
         public string TablaAfectada { get; set; } = string.Empty;
 
-        [Required]
-        public string Detalles { get; set; } = string.Empty;
+        // Detalles suele ser el principal causante de nulos si una acción no registró parámetros. Lo hacemos anulable.
+        public string? Detalles { get; set; }
 
         [Required]
         public DateTime FechaRegistro { get; set; }
 
         public LogAuditoria()
         {
-            // CORREGIDO: Garantiza que cualquier instancia nueva tome la hora de Nicaragua por defecto
             var zonaNica = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
             FechaRegistro = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zonaNica);
         }
