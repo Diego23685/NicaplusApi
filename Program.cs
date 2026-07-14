@@ -43,14 +43,18 @@ builder.Services.AddControllers().AddJsonOptions(options =>
     options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles);
 
 // 2. CORS Único (Para evitar conflictos)
+// 2. CORS Ajustado para múltiples orígenes (Admin y Catálogo Público)
 builder.Services.AddCors(options => 
 {
     options.AddPolicy("PermitirTodo", policy =>
     {
-        policy.WithOrigins("https://administration.nicaplusgaming.online") // Especifica el origen
+        policy.WithOrigins(
+                  "https://administration.nicaplusgaming.online", 
+                  "https://www.nicaplusgaming.online" // ◄ Agregamos el catálogo de clientes
+              )
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // Necesario para tokens y cookies
+              .AllowCredentials();
     });
 });
 
