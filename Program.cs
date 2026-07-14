@@ -50,7 +50,9 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins(
                   "https://administration.nicaplusgaming.online", 
-                  "https://www.nicaplusgaming.online" // ◄ Agregamos el catálogo de clientes
+                  "https://www.nicaplusgaming.online", // ◄ Agregamos el catálogo de clientes
+                  "http://localhost:5173", // ◄ Agregamos el origen de la aplicación frontend
+                  "http://administration.localhost:5173" // ◄ Agregamos el origen de la aplicación frontend para administración
               )
               .AllowAnyHeader()
               .AllowAnyMethod()

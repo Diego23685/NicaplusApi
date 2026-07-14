@@ -102,6 +102,17 @@ namespace NicaplusApi.Controllers
             var orden = await _context.OrdenesServicio.Include(o => o.Cliente).FirstOrDefaultAsync(o => o.Id == id);
             if (orden == null) return NotFound("La orden de servicio no existe.");
 
+            // 1. Extraer el ID del usuario logueado desde los Claims del Token JWT
+            var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            
+            // Fallback: Si por alguna razón no viene en el token, usamos un ID administrador válido por defecto (ej. 3) o arrojamos Unauthorized
+            if (string.IsNullOrEmpty(userIdClaim))
+            {
+                return Unauthorized("No se pudo identificar al usuario que procesa la entrega.");
+            }
+            
+            int idUsuarioLogueado = int.Parse(userIdClaim);
+
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
@@ -111,20 +122,26 @@ namespace NicaplusApi.Controllers
                 orden.FechaEntrega = ahoraNicaragua;
                 orden.Notas = $"[ENTREGA] Herramientas: {dto.HerramientasUsed}. Diagnóstico: {dto.DiagnosticoFinal}. {orden.Notas}";
 
+                var productoServicio = await _context.Productos
+                    .FirstOrDefaultAsync(p => p.RequiereServicio || p.Id == dto.IdProductoServicio);
+
+                if (productoServicio == null)
+                {
+                    return BadRequest("No se encontró un producto de tipo 'Servicio' en el catálogo para el ingreso contable.");
+                }
+
                 var ventaServicio = new Venta
                 {
-                    IdUsuario = 1, 
+                    IdUsuario = idUsuarioLogueado, // ◄ CORREGIDO: Registra la venta al usuario real que está operando
                     IdCliente = orden.IdCliente,
-                    MetodoPago = "Efectivo",
+                    MetodoPago = dto.MetodoPago,
                     FechaVenta = ahoraNicaragua, 
                     Total = dto.CostoReparacion,
                     Detalles = new List<DetalleVenta>
                     {
                         new DetalleVenta
                         {
-                            // CORREGIDO: Volvemos a asignar un ID numérico (1) para evitar el error de tipo por valor no nulable (int). 
-                            // Asegúrate de que el ID 1 represente un servicio general o soporte en tu tabla de Productos.
-                            IdProducto = 1, 
+                            IdProducto = productoServicio.Id, 
                             Cantidad = 1,
                             PrecioUnitario = dto.CostoReparacion,
                             SubTotal = dto.CostoReparacion,
@@ -164,6 +181,8 @@ namespace NicaplusApi.Controllers
             public required string DiagnosticoFinal { get; set; }
             public required string HerramientasUsed { get; set; } 
             public decimal CostoReparacion { get; set; }
+            public string MetodoPago { get; set; } = "Efectivo"; // ◄ NUEVO
+            public int IdProductoServicio { get; set; } = 1;      // ◄ NUEVO: Dinámico desde el Front
         }
     }
 }

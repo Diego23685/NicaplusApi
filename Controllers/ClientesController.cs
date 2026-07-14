@@ -206,19 +206,20 @@ namespace NicaplusApi.Controllers
             var cliente = await _context.Clientes.FindAsync(id);
             if (cliente == null) return NotFound("Cliente no encontrado.");
 
-            var ventasAsociadas = await _context.Ventas
-                .Where(v => v.IdCliente == id)
-                .OrderByDescending(v => v.FechaVenta)
-                .Select(v => new { v.Id, Fecha = v.FechaVenta, v.Total, v.MetodoPago })
-                .ToListAsync();
+            // Validar Ventas
+            var tieneVentas = await _context.Ventas.AnyAsync(v => v.IdCliente == id);
+            // Validar Taller
+            var tieneTaller = await _context.OrdenesServicio.AnyAsync(o => o.IdCliente == id);
+            // Validar Deudas
+            var tieneDeudas = await _context.CuentasPorCobrar.AnyAsync(c => c.IdCliente == id && c.SaldoPendiente > 0);
 
-            if (ventasAsociadas.Any())
+            if (tieneVentas || tieneTaller || tieneDeudas)
             {
                 return BadRequest(new
                 {
-                    Mensaje = "No se puede eliminar el cliente porque tiene ventas registradas en el sistema.",
-                    CantidadVentas = ventasAsociadas.Count,
-                    Ventas = ventasAsociadas
+                    error = "Restricción de integridad contable/operativa",
+                    mensaje = "No se puede eliminar el cliente porque posee historial de facturas, órdenes de taller o saldos pendientes de pago.",
+                    detalles = new { tieneVentas, tieneTaller, tieneDeudas }
                 });
             }
 

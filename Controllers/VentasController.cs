@@ -161,12 +161,12 @@ namespace NicaplusApi.Controllers
                 // 1. REVERSIÓN TOTAL DE LA VENTA ANTERIOR
                 // ==========================================
                 
-                // Revertir stock físico y liberar perfiles digitales/suscripciones
                 foreach (var detalleOrig in ventaOriginal.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
                     if (prod != null)
                     {
+                        // Devolver stock físico
                         if (!prod.EsDigital && !prod.RequiereServicio)
                         {
                             prod.StockActual += detalleOrig.Cantidad;
@@ -174,21 +174,36 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // Eliminar suscripciones asociadas a esta venta
-                var suscripcionesViejas = _context.Suscripciones.Where(s => s.IdCliente == ventaOriginal.IdCliente && s.FechaInicio == ventaOriginal.FechaVenta);
-                _context.Suscripciones.RemoveRange(suscripcionesViejas);
+                // LIBERACIÓN ESTRICTA DE PERFILES ANTES DE BORRAR SUSCRIPCIONES
+                var suscripcionesViejas = await _context.Suscripciones
+                    .Where(s => s.IdCliente == ventaOriginal.IdCliente && s.FechaInicio == ventaOriginal.FechaVenta)
+                    .ToListAsync();
 
-                // Purgar detalles viejos
+                foreach (var suscripcionVieja in suscripcionesViejas)
+                {
+                    if (suscripcionVieja.IdPerfilCuenta.HasValue)
+                    {
+                        var perfil = await _context.PerfilesCuentas.FindAsync(suscripcionVieja.IdPerfilCuenta.Value);
+                        if (perfil != null)
+                        {
+                            perfil.Ocupado = false;
+                            perfil.IdClienteAsignado = null;
+                            _context.PerfilesCuentas.Update(perfil);
+                        }
+                    }
+                }
+
+                _context.Suscripciones.RemoveRange(suscripcionesViejas);
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
                 await _context.SaveChangesAsync(); 
 
                 // ==========================================
-                // 2. APLICAR NUEVOS VALORES (EDICIÓN ABSOLUTA)
+                // 2. APLICAR NUEVOS VALORES
                 // ==========================================
                 
                 ventaOriginal.IdCliente = ventaActualizada.IdCliente == 0 ? null : ventaActualizada.IdCliente;
                 ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
-                ventaOriginal.IdUsuario = ventaActualizada.IdUsuario; // Permite cambiar el vendedor si es necesario
+                ventaOriginal.IdUsuario = ventaActualizada.IdUsuario;
 
                 decimal nuevoTotalCalculado = 0;
 
@@ -197,7 +212,6 @@ namespace NicaplusApi.Controllers
                     var prod = await _context.Productos.FindAsync(nuevoDetalle.IdProducto);
                     if (prod == null) return BadRequest($"El producto con ID {nuevoDetalle.IdProducto} no existe.");
 
-                    // Validar y descontar stock nuevo
                     if (!prod.EsDigital && !prod.RequiereServicio)
                     {
                         if (prod.StockActual < nuevoDetalle.Cantidad)
@@ -206,22 +220,23 @@ namespace NicaplusApi.Controllers
                         prod.StockActual -= nuevoDetalle.Cantidad;
                     }
 
-                    // Si es suscripción, recrear la lógica de negocio
                     if (prod.EsSuscripcion)
                     {
                         if (!ventaOriginal.IdCliente.HasValue)
                             return BadRequest($"El producto '{prod.Nombre}' requiere un cliente asociado.");
 
+                        // Buscar un perfil verdaderamente libre (acabamos de liberar el anterior, por lo que está elegible si no cambió de producto)
                         var perfilDisponible = await _context.PerfilesCuentas
-                            .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && (!p.Ocupado || p.IdClienteAsignado == ventaOriginal.IdCliente));
+                            .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && !p.Ocupado);
 
-                        if (perfilDisponible != null)
-                        {
-                            perfilDisponible.Ocupado = true;
-                            perfilDisponible.IdClienteAsignado = ventaOriginal.IdCliente.Value;
-                            _context.PerfilesCuentas.Update(perfilDisponible);
-                            nuevoDetalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN}";
-                        }
+                        if (perfilDisponible == null)
+                            return BadRequest($"No quedan pantallas disponibles en el pool para '{prod.Nombre}'.");
+
+                        perfilDisponible.Ocupado = true;
+                        perfilDisponible.IdClienteAsignado = ventaOriginal.IdCliente.Value;
+                        _context.PerfilesCuentas.Update(perfilDisponible);
+                        
+                        nuevoDetalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN} | Acceso: {perfilDisponible.CorreoCuenta} / {perfilDisponible.PasswordCuenta}";
 
                         var nuevaSuscripcion = new Suscripcion
                         {
@@ -229,6 +244,7 @@ namespace NicaplusApi.Controllers
                             NombreServicio = prod.Nombre,
                             TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
                             IdProducto = prod.Id,
+                            IdPerfilCuenta = perfilDisponible.Id, // CORREGIDO: Mapear la relación del ID del perfil
                             CostoRenovacion = nuevoDetalle.PrecioUnitario,
                             FechaInicio = ventaOriginal.FechaVenta,
                             FechaVencimiento = ventaOriginal.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
@@ -240,7 +256,6 @@ namespace NicaplusApi.Controllers
 
                     nuevoDetalle.IdVenta = id;
                     nuevoDetalle.Id = 0;
-                    // El subtotal se calcula explícitamente con lo que venga del cliente aplicando descuento
                     nuevoDetalle.SubTotal = (nuevoDetalle.Cantidad * nuevoDetalle.PrecioUnitario) - nuevoDetalle.Descuento;
                     nuevoTotalCalculado += nuevoDetalle.SubTotal;
 
@@ -250,7 +265,7 @@ namespace NicaplusApi.Controllers
                 ventaOriginal.Total = nuevoTotalCalculado;
 
                 // ==========================================
-                // 3. SINCRONIZACIÓN CONTABLE (CAJA Y CRÉDITOS)
+                // 3. SINCRONIZACIÓN CONTABLE
                 // ==========================================
                 
                 var movimientoCaja = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
@@ -316,7 +331,7 @@ namespace NicaplusApi.Controllers
 
                 if (venta == null) return NotFound("La venta no existe.");
 
-                // 1. Devolver Stock
+                // 1. Devolver Stock Físico
                 foreach (var detalle in venta.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalle.IdProducto);
@@ -326,18 +341,35 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 2. Romper o liberar suscripciones / perfiles digitales
-                var suscripciones = _context.Suscripciones.Where(s => s.IdCliente == venta.IdCliente && s.FechaInicio == venta.FechaVenta);
+                // 2. CORREGIDO: Liberar perfiles vinculados en PerfilesCuentas antes de borrar la suscripción
+                var suscripciones = await _context.Suscripciones
+                    .Where(s => s.IdCliente == venta.IdCliente && s.FechaInicio == venta.FechaVenta)
+                    .ToListAsync();
+
+                foreach (var sus in suscripciones)
+                {
+                    if (sus.IdPerfilCuenta.HasValue)
+                    {
+                        var perfil = await _context.PerfilesCuentas.FindAsync(sus.IdPerfilCuenta.Value);
+                        if (perfil != null)
+                        {
+                            perfil.Ocupado = false;
+                            perfil.IdClienteAsignado = null;
+                            _context.PerfilesCuentas.Update(perfil);
+                        }
+                    }
+                }
+
                 _context.Suscripciones.RemoveRange(suscripciones);
 
-                // 3. Eliminar rastro financiero (Caja y Cuentas por Cobrar)
+                // 3. Eliminar rastro financiero
                 var movimiento = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
                 if (movimiento != null) _context.MovimientosCaja.Remove(movimiento);
 
                 var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
                 if (cpc != null) _context.CuentasPorCobrar.Remove(cpc);
 
-                // 4. Eliminar la venta (la cascada borrará DetallesVentas dependientes si está configurada, si no, borrar manual)
+                // 4. Eliminar la venta y sus detalles de manera atómica
                 _context.DetallesVentas.RemoveRange(venta.Detalles);
                 _context.Ventas.Remove(venta);
 

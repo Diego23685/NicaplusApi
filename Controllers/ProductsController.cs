@@ -89,11 +89,23 @@ namespace NicaplusApi.Controllers
         public async Task<IActionResult> DeleteProducto(int id)
         {
             var producto = await _context.Productos.FindAsync(id);
-            if (producto == null)
+            if (producto == null) return NotFound();
+
+            // Verificamos si tiene historial para decidir si borrar físico o lógico
+            var tieneVentas = await _context.DetallesVentas.AnyAsync(d => d.IdProducto == id);
+            var tieneSuscripciones = await _context.Suscripciones.AnyAsync(s => s.IdProducto == id);
+
+            if (tieneVentas || tieneSuscripciones)
             {
-                return NotFound();
+                // Si tiene historial, no destruimos datos contables: hacemos borrado lógico
+                producto.VisibleEnCatalogo = false;
+                // Si agregaste el campo Activo: producto.Activo = false;
+                _context.Productos.Update(producto);
+                await _context.SaveChangesAsync();
+                return Ok(new { mensaje = "El producto tiene historial comercial. Se ha ocultado del catálogo y desactivado para nuevas ventas." });
             }
 
+            // Si está completamente limpio, se puede borrar físicamente
             _context.Productos.Remove(producto);
             await _context.SaveChangesAsync();
 
