@@ -16,6 +16,7 @@ bld/
 # Excluye configuraciones locales con contraseñas reales de producción
 appsettings.Development.json
 appsettings.Production.json
+appsettings.json
 *.secrets.json
 .env
 

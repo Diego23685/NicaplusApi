@@ -151,96 +151,142 @@ namespace NicaplusApi.Controllers
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                // Cargamos la venta incluyendo sus detalles anteriores
-                var ventaOriginal = await _context.Ventas.Include(v => v.Detalles)
+                var ventaOriginal = await _context.Ventas
+                    .Include(v => v.Detalles)
                     .FirstOrDefaultAsync(v => v.Id == id);
                 
                 if (ventaOriginal == null) return NotFound("Venta no encontrada.");
 
-                // 1. REVERSIÓN DE STOCK FISICO ANTERIOR
+                // ==========================================
+                // 1. REVERSIÓN TOTAL DE LA VENTA ANTERIOR
+                // ==========================================
+                
+                // Revertir stock físico y liberar perfiles digitales/suscripciones
                 foreach (var detalleOrig in ventaOriginal.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
-                    if (prod != null && !prod.EsDigital && !prod.RequiereServicio)
-                    {
-                        prod.StockActual += detalleOrig.Cantidad;
-                    }
-                }
-
-                // 2. PURGAR LOS DETALLES VIEJOS DE LA BASE DE DATOS
-                // Esto evita que se dupliquen las relaciones idVenta en MySQL/SQL Server
-                _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
-                await _context.SaveChangesAsync(); // Limpiamos el contexto tracking
-
-                // 3. APLICAR NUEVOS VALORES DE ENCABEZADO
-                ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
-                ventaOriginal.IdCliente = ventaActualizada.IdCliente;
-
-                decimal nuevoTotalCalculado = 0;
-
-                // 4. DESCONTAR EL NUEVO STOCK E INYECTAR NUEVOS DETALLES CON ID_VENTA ASIGNADO
-                foreach (var nuevoDetalle in ventaActualizada.Detalles)
-                {
-                    var prod = await _context.Productos.FindAsync(nuevoDetalle.IdProducto);
                     if (prod != null)
                     {
                         if (!prod.EsDigital && !prod.RequiereServicio)
                         {
-                            if (prod.StockActual < nuevoDetalle.Cantidad)
-                                return BadRequest($"Stock insuficiente tras reajuste para: {prod.Nombre}");
-                            
-                            prod.StockActual -= nuevoDetalle.Cantidad;
+                            prod.StockActual += detalleOrig.Cantidad;
                         }
                     }
+                }
 
-                    // Forzamos que apunte a la factura correcta y sumamos al total real
+                // Eliminar suscripciones asociadas a esta venta
+                var suscripcionesViejas = _context.Suscripciones.Where(s => s.IdCliente == ventaOriginal.IdCliente && s.FechaInicio == ventaOriginal.FechaVenta);
+                _context.Suscripciones.RemoveRange(suscripcionesViejas);
+
+                // Purgar detalles viejos
+                _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
+                await _context.SaveChangesAsync(); 
+
+                // ==========================================
+                // 2. APLICAR NUEVOS VALORES (EDICIÓN ABSOLUTA)
+                // ==========================================
+                
+                ventaOriginal.IdCliente = ventaActualizada.IdCliente == 0 ? null : ventaActualizada.IdCliente;
+                ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
+                ventaOriginal.IdUsuario = ventaActualizada.IdUsuario; // Permite cambiar el vendedor si es necesario
+
+                decimal nuevoTotalCalculado = 0;
+
+                foreach (var nuevoDetalle in ventaActualizada.Detalles)
+                {
+                    var prod = await _context.Productos.FindAsync(nuevoDetalle.IdProducto);
+                    if (prod == null) return BadRequest($"El producto con ID {nuevoDetalle.IdProducto} no existe.");
+
+                    // Validar y descontar stock nuevo
+                    if (!prod.EsDigital && !prod.RequiereServicio)
+                    {
+                        if (prod.StockActual < nuevoDetalle.Cantidad)
+                            return BadRequest($"Stock insuficiente para: {prod.Nombre}. Disponible: {prod.StockActual}");
+                        
+                        prod.StockActual -= nuevoDetalle.Cantidad;
+                    }
+
+                    // Si es suscripción, recrear la lógica de negocio
+                    if (prod.EsSuscripcion)
+                    {
+                        if (!ventaOriginal.IdCliente.HasValue)
+                            return BadRequest($"El producto '{prod.Nombre}' requiere un cliente asociado.");
+
+                        var perfilDisponible = await _context.PerfilesCuentas
+                            .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && (!p.Ocupado || p.IdClienteAsignado == ventaOriginal.IdCliente));
+
+                        if (perfilDisponible != null)
+                        {
+                            perfilDisponible.Ocupado = true;
+                            perfilDisponible.IdClienteAsignado = ventaOriginal.IdCliente.Value;
+                            _context.PerfilesCuentas.Update(perfilDisponible);
+                            nuevoDetalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN}";
+                        }
+
+                        var nuevaSuscripcion = new Suscripcion
+                        {
+                            IdCliente = ventaOriginal.IdCliente.Value,
+                            NombreServicio = prod.Nombre,
+                            TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
+                            IdProducto = prod.Id,
+                            CostoRenovacion = nuevoDetalle.PrecioUnitario,
+                            FechaInicio = ventaOriginal.FechaVenta,
+                            FechaVencimiento = ventaOriginal.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
+                            Estado = "Activa",
+                            DetallesCredenciales = nuevoDetalle.MetadataDigital
+                        };
+                        _context.Suscripciones.Add(nuevaSuscripcion);
+                    }
+
                     nuevoDetalle.IdVenta = id;
-                    nuevoDetalle.Id = 0; // Evita conflictos de llaves primarias al re-insertar
+                    nuevoDetalle.Id = 0;
+                    // El subtotal se calcula explícitamente con lo que venga del cliente aplicando descuento
+                    nuevoDetalle.SubTotal = (nuevoDetalle.Cantidad * nuevoDetalle.PrecioUnitario) - nuevoDetalle.Descuento;
                     nuevoTotalCalculado += nuevoDetalle.SubTotal;
 
                     _context.DetallesVentas.Add(nuevoDetalle);
                 }
 
-                // Asignamos el nuevo total recalculado a la cabecera de la venta
                 ventaOriginal.Total = nuevoTotalCalculado;
 
-                // 5. CORRECCIÓN Y ACTUALIZACIÓN DEL MOVIMIENTO DE CAJA
+                // ==========================================
+                // 3. SINCRONIZACIÓN CONTABLE (CAJA Y CRÉDITOS)
+                // ==========================================
+                
                 var movimientoCaja = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
                 if (movimientoCaja != null)
                 {
                     movimientoCaja.Monto = nuevoTotalCalculado;
-                    movimientoCaja.Detalle = $"Facturación (Corregida via Auditoría) de Orden #{id}. Método: {ventaActualizada.MetodoPago}";
+                    movimientoCaja.Detalle = $"Facturación (Editada) de Orden #{id}. Método: {ventaOriginal.MetodoPago}";
                     _context.MovimientosCaja.Update(movimientoCaja);
                 }
 
-                // 6. ACTUALIZACIÓN DE CUENTAS POR COBRAR SI FUE CRÉDITO
                 var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
-                if (ventaActualizada.MetodoPago == "Crédito")
+                if (ventaOriginal.MetodoPago == "Crédito" && ventaOriginal.IdCliente.HasValue)
                 {
                     if (cpc != null)
                     {
+                        cpc.IdCliente = ventaOriginal.IdCliente.Value;
                         cpc.MontoTotal = nuevoTotalCalculado;
-                        cpc.SaldoPendiente = nuevoTotalCalculado; // Ajustar si el cliente ya había abonado algo
+                        cpc.SaldoPendiente = nuevoTotalCalculado;
                         _context.CuentasPorCobrar.Update(cpc);
                     }
                     else
                     {
-                        var nuevaCuentaCobrar = new CuentaPorCobrar
+                        _context.CuentasPorCobrar.Add(new CuentaPorCobrar
                         {
-                            IdCliente = ventaActualizada.IdCliente!.Value,
+                            IdCliente = ventaOriginal.IdCliente.Value,
                             IdVenta = id,
                             MontoTotal = nuevoTotalCalculado,
                             SaldoPendiente = nuevoTotalCalculado,
                             FechaEmision = ventaOriginal.FechaVenta,
                             FechaVencimiento = ventaOriginal.FechaVenta.AddDays(15),
                             Estado = "Pendiente"
-                        };
-                        _context.CuentasPorCobrar.Add(nuevaCuentaCobrar);
+                        });
                     }
                 }
                 else if (cpc != null)
                 {
-                    // Si antes era Crédito y cambió a Efectivo/Transferencia, se elimina la deuda
                     _context.CuentasPorCobrar.Remove(cpc);
                 }
 
@@ -253,7 +299,57 @@ namespace NicaplusApi.Controllers
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, $"Fallo al revertir o recalcular libros contables: {ex.Message}");
+                return StatusCode(500, $"Error en auditoría: {ex.Message}");
+            }
+        }
+
+        [HttpDelete("{id}")]
+        [Authorize(Roles = "Administrador")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                var venta = await _context.Ventas
+                    .Include(v => v.Detalles)
+                    .FirstOrDefaultAsync(v => v.Id == id);
+
+                if (venta == null) return NotFound("La venta no existe.");
+
+                // 1. Devolver Stock
+                foreach (var detalle in venta.Detalles)
+                {
+                    var prod = await _context.Productos.FindAsync(detalle.IdProducto);
+                    if (prod != null && !prod.EsDigital && !prod.RequiereServicio)
+                    {
+                        prod.StockActual += detalle.Cantidad;
+                    }
+                }
+
+                // 2. Romper o liberar suscripciones / perfiles digitales
+                var suscripciones = _context.Suscripciones.Where(s => s.IdCliente == venta.IdCliente && s.FechaInicio == venta.FechaVenta);
+                _context.Suscripciones.RemoveRange(suscripciones);
+
+                // 3. Eliminar rastro financiero (Caja y Cuentas por Cobrar)
+                var movimiento = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
+                if (movimiento != null) _context.MovimientosCaja.Remove(movimiento);
+
+                var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
+                if (cpc != null) _context.CuentasPorCobrar.Remove(cpc);
+
+                // 4. Eliminar la venta (la cascada borrará DetallesVentas dependientes si está configurada, si no, borrar manual)
+                _context.DetallesVentas.RemoveRange(venta.Detalles);
+                _context.Ventas.Remove(venta);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return NoContent();
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return StatusCode(500, $"Error al eliminar la venta: {ex.Message}");
             }
         }
     }
