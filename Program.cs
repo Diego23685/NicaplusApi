@@ -47,9 +47,10 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("PermitirTodo", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins("https://administration.nicaplusgaming.online") // Especifica el origen
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              .AllowCredentials(); // Necesario para tokens y cookies
     });
 });
 
