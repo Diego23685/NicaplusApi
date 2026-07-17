@@ -141,62 +141,68 @@ namespace NicaplusApi.Controllers
                 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
                 <title>Activa tu cuenta en Nicaplus Gaming</title>
             </head>
-            <body style='margin: 0; padding: 0; background-color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, ""Segoe UI"", Roboto, Helvetica, Arial, sans-serif; color: #ffffff;'>
-                <table cellpadding='0' cellspacing='0' width='100%' style='background-color: #0f172a; min-height: 100vh; padding: 40px 20px;'>
+            <body style='margin: 0; padding: 0; background-color: #0b0f19; font-family: -apple-system, BlinkMacSystemFont, ""Segoe UI"", Roboto, Helvetica, Arial, sans-serif; color: #ffffff;'>
+                <table cellpadding='0' cellspacing='0' width='100%' style='background-color: #0b0f19; min-height: 100vh; padding: 40px 20px;'>
                     <tr>
                         <td align='center' valign='top'>
-                            <!-- Contenedor Principal -->
-                            <table cellpadding='0' cellspacing='0' width='100%' style='max-width: 600px; background-color: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);'>
+                            <!-- Contenedor Principal con un sutil borde neón púrpura -->
+                            <table cellpadding='0' cellspacing='0' width='100%' style='max-width: 600px; background-color: #131b2e; border-radius: 16px; border: 1px solid #7c3aed; overflow: hidden; box-shadow: 0 0 20px rgba(124, 58, 237, 0.15);'>
                                 
-                                <!-- Banner de Encabezado -->
+                                <!-- Encabezado con degradado suave hacia el fondo -->
                                 <tr>
-                                    <td align='center' style='padding: 30px 40px; border-bottom: 3px solid #fb923c; background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);'>
-                                        <h1 style='margin: 0; font-size: 28px; font-weight: 800; letter-spacing: 1px; color: #ffffff; text-transform: uppercase;'>
-                                            NICAPLUS<span style='color: #581c7e;'> GAMING</span>
+                                    <td align='center' style='padding: 35px 40px; background: linear-gradient(180deg, #2e1065 0%, #131b2e 100%); border-bottom: 1px solid #4c1d95;'>
+                                        <h1 style='margin: 0; font-size: 28px; font-weight: 900; letter-spacing: 1.5px; color: #ffffff; text-transform: uppercase;'>
+                                            NICAPLUS<span style='color: #a78bfa; text-shadow: 0 0 10px rgba(167, 139, 250, 0.6);'> GAMING</span>
                                         </h1>
-                                        <p style='margin: 5px 0 0 0; font-size: 13px; color: #581c7e; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;'>Soporte y Ventas Oficial</p>
+                                        <p style='margin: 6px 0 0 0; font-size: 11px; color: #cbd5e1; font-weight: 600; letter-spacing: 3px; text-transform: uppercase;'>Soporte y Ventas Oficial</p>
                                     </td>
                                 </tr>
 
                                 <!-- Cuerpo del Correo -->
                                 <tr>
                                     <td style='padding: 40px; text-align: left;'>
-                                        <h2 style='margin-top: 0; margin-bottom: 20px; font-size: 22px; font-weight: 700; color: #581c7e;'>
+                                        <!-- Título con acento Púrpura Neón Claro -->
+                                        <h2 style='margin-top: 0; margin-bottom: 20px; font-size: 24px; font-weight: 700; color: #c084fc;'>
                                             ¡Hola, {nombreSeguro}! 👋
                                         </h2>
                                         
-                                        <p style='margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #cbd5e1;'>
-                                            Te damos la más cordial bienvenida a nuestra plataforma. Estamos muy emocionados de tenerte con nosotros en la comunidad de <strong>NICAPLUS</strong>.
+                                        <p style='margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #94a3b8;'>
+                                            Te damos la más cordial bienvenida a nuestra plataforma. Estamos listos para llevar tu experiencia digital al siguiente nivel en la comunidad de <strong>NICAPLUS</strong>.
                                         </p>
                                         
-                                        <p style='margin: 0 0 30px 0; font-size: 15px; line-height: 1.6; color: #cbd5e1;'>
-                                            Para completar tu registro y asegurar tu cuenta de forma exitosa, por favor haz clic en el siguiente botón de activación (este enlace expirará en <strong>15 minutos</strong> por tu seguridad):
+                                        <p style='margin: 0 0 35px 0; font-size: 15px; line-height: 1.6; color: #94a3b8;'>
+                                            Para completar tu registro y asegurar tu cuenta de forma exitosa, haz clic en el botón de activación inferior (este enlace expirará en <strong>15 minutos</strong>):
                                         </p>
 
-                                        <!-- Botón de Acción -->
-                                        <table cellpadding='0' cellspacing='0' width='100%' style='margin-bottom: 30px;'>
+                                        <!-- Botón de Acción con alto contraste (Texto Blanco + Púrpura Eléctrico) -->
+                                        <table cellpadding='0' cellspacing='0' width='100%' style='margin-bottom: 35px;'>
                                             <tr>
                                                 <td align='center'>
-                                                    <a href='{enlace}' style='display: inline-block; padding: 14px 32px; background-color: #581c7e; color: #000000; font-size: 15px; font-weight: bold; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.5px; transition: background-color 0.2s;'>
+                                                    <a href='{enlace}' style='display: inline-block; padding: 15px 36px; background-color: #7c3aed; color: #ffffff; font-size: 15px; font-weight: bold; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3); border: 1px solid #a78bfa;'>
                                                         Confirmar mi cuenta
                                                     </a>
                                                 </td>
                                             </tr>
                                         </table>
 
-                                        <p style='margin: 0; font-size: 14px; line-height: 1.5; color: #64748b; font-style: italic; border-left: 3px solid #334155; padding-left: 15px;'>
-                                            Si no solicitaste la creación de esta cuenta o crees que se trata de un error, puedes ignorar este correo con total tranquilidad.
-                                        </p>
+                                        <!-- Nota con simulación de transparencia (Fondo grisáceo muy oscuro y borde morado) -->
+                                        <table cellpadding='0' cellspacing='0' width='100%' style='background-color: #1e1b4b; border-left: 4px solid #a78bfa; border-radius: 4px;'>
+                                            <tr>
+                                                <td style='padding: 15px; color: #94a3b8; font-size: 13px; line-height: 1.5; font-style: italic;'>
+                                                    Si no solicitaste la creación de esta cuenta o crees que se trata de un error, puedes ignorar este correo con total tranquilidad.
+                                                </td>
+                                            </tr>
+                                        </table>
                                     </td>
                                 </tr>
 
                                 <!-- Pie de Página -->
                                 <tr>
-                                    <td style='padding: 30px 40px; background-color: #0f172a; border-top: 1px solid #334155; text-align: center;'>
-                                        <p style='margin: 0 0 10px 0; font-size: 12px; color: #94a3b8;'>
+                                    <td style='padding: 30px 40px; background-color: #0b0f19; border-top: 1px solid #1e293b; text-align: center;'>
+                                        <p style='margin: 0 0 8px 0; font-size: 12px; color: #64748b;'>
                                             © {DateTime.Now.Year} NICAPLUS GAMING. Todos los derechos reservados.
                                         </p>
-                                        <p style='margin: 0; font-size: 11px; color: #64748b;'>
+                                        <p style='margin: 0; font-size: 11px; color: #475569;'>
                                             León, Nicaragua. Este es un correo automático, por favor no respondas directamente a esta dirección.
                                         </p>
                                     </td>
