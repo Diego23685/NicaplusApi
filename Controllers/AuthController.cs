@@ -152,16 +152,16 @@ namespace NicaplusApi.Controllers
                                 <tr>
                                     <td align='center' style='padding: 30px 40px; border-bottom: 3px solid #fb923c; background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);'>
                                         <h1 style='margin: 0; font-size: 28px; font-weight: 800; letter-spacing: 1px; color: #ffffff; text-transform: uppercase;'>
-                                            NICAPLUS<span style='color: #fb923c;'> GAMING</span>
+                                            NICAPLUS<span style='color: #581c7e;'> GAMING</span>
                                         </h1>
-                                        <p style='margin: 5px 0 0 0; font-size: 13px; color: #38bdf8; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;'>Soporte y Ventas Oficial</p>
+                                        <p style='margin: 5px 0 0 0; font-size: 13px; color: #581c7e; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;'>Soporte y Ventas Oficial</p>
                                     </td>
                                 </tr>
 
                                 <!-- Cuerpo del Correo -->
                                 <tr>
                                     <td style='padding: 40px; text-align: left;'>
-                                        <h2 style='margin-top: 0; margin-bottom: 20px; font-size: 22px; font-weight: 700; color: #38bdf8;'>
+                                        <h2 style='margin-top: 0; margin-bottom: 20px; font-size: 22px; font-weight: 700; color: #581c7e;'>
                                             ¡Hola, {nombreSeguro}! 👋
                                         </h2>
                                         
@@ -177,7 +177,7 @@ namespace NicaplusApi.Controllers
                                         <table cellpadding='0' cellspacing='0' width='100%' style='margin-bottom: 30px;'>
                                             <tr>
                                                 <td align='center'>
-                                                    <a href='{enlace}' style='display: inline-block; padding: 14px 32px; background-color: #fb923c; color: #000000; font-size: 15px; font-weight: bold; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.5px; transition: background-color 0.2s;'>
+                                                    <a href='{enlace}' style='display: inline-block; padding: 14px 32px; background-color: #581c7e; color: #000000; font-size: 15px; font-weight: bold; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.5px; transition: background-color 0.2s;'>
                                                         Confirmar mi cuenta
                                                     </a>
                                                 </td>
