@@ -134,11 +134,80 @@ namespace NicaplusApi.Controllers
             var nombreSeguro = WebUtility.HtmlEncode(cliente.Nombre);
 
             var html = $@"
-                <h2>Bienvenido a Nicaplus, {nombreSeguro}</h2>
-                <p>Gracias por registrarte.</p>
-                <p>Para activar tu cuenta haz clic en el siguiente enlace (expira en 15 minutos):</p>
-                <p><a href='{enlace}'>Confirmar mi correo</a></p>
-                <p>Si no solicitaste esta cuenta puedes ignorar este correo.</p>";
+            <!DOCTYPE html>
+            <html lang='es'>
+            <head>
+                <meta charset='UTF-8'>
+                <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+                <title>Activa tu cuenta en Nicaplus Gaming</title>
+            </head>
+            <body style='margin: 0; padding: 0; background-color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, ""Segoe UI"", Roboto, Helvetica, Arial, sans-serif; color: #ffffff;'>
+                <table cellpadding='0' cellspacing='0' width='100%' style='background-color: #0f172a; min-height: 100vh; padding: 40px 20px;'>
+                    <tr>
+                        <td align='center' valign='top'>
+                            <!-- Contenedor Principal -->
+                            <table cellpadding='0' cellspacing='0' width='100%' style='max-width: 600px; background-color: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);'>
+                                
+                                <!-- Banner de Encabezado -->
+                                <tr>
+                                    <td align='center' style='padding: 30px 40px; border-bottom: 3px solid #fb923c; background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);'>
+                                        <h1 style='margin: 0; font-size: 28px; font-weight: 800; letter-spacing: 1px; color: #ffffff; text-transform: uppercase;'>
+                                            NICAPLUS<span style='color: #fb923c;'> GAMING</span>
+                                        </h1>
+                                        <p style='margin: 5px 0 0 0; font-size: 13px; color: #38bdf8; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;'>Soporte y Ventas Oficial</p>
+                                    </td>
+                                </tr>
+
+                                <!-- Cuerpo del Correo -->
+                                <tr>
+                                    <td style='padding: 40px; text-align: left;'>
+                                        <h2 style='margin-top: 0; margin-bottom: 20px; font-size: 22px; font-weight: 700; color: #38bdf8;'>
+                                            ¡Hola, {nombreSeguro}! 👋
+                                        </h2>
+                                        
+                                        <p style='margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #cbd5e1;'>
+                                            Te damos la más cordial bienvenida a nuestra plataforma. Estamos muy emocionados de tenerte con nosotros en la comunidad de <strong>NICAPLUS</strong>.
+                                        </p>
+                                        
+                                        <p style='margin: 0 0 30px 0; font-size: 15px; line-height: 1.6; color: #cbd5e1;'>
+                                            Para completar tu registro y asegurar tu cuenta de forma exitosa, por favor haz clic en el siguiente botón de activación (este enlace expirará en <strong>15 minutos</strong> por tu seguridad):
+                                        </p>
+
+                                        <!-- Botón de Acción -->
+                                        <table cellpadding='0' cellspacing='0' width='100%' style='margin-bottom: 30px;'>
+                                            <tr>
+                                                <td align='center'>
+                                                    <a href='{enlace}' style='display: inline-block; padding: 14px 32px; background-color: #fb923c; color: #000000; font-size: 15px; font-weight: bold; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.5px; transition: background-color 0.2s;'>
+                                                        Confirmar mi cuenta
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                        </table>
+
+                                        <p style='margin: 0; font-size: 14px; line-height: 1.5; color: #64748b; font-style: italic; border-left: 3px solid #334155; padding-left: 15px;'>
+                                            Si no solicitaste la creación de esta cuenta o crees que se trata de un error, puedes ignorar este correo con total tranquilidad.
+                                        </p>
+                                    </td>
+                                </tr>
+
+                                <!-- Pie de Página -->
+                                <tr>
+                                    <td style='padding: 30px 40px; background-color: #0f172a; border-top: 1px solid #334155; text-align: center;'>
+                                        <p style='margin: 0 0 10px 0; font-size: 12px; color: #94a3b8;'>
+                                            © {DateTime.Now.Year} NICAPLUS GAMING. Todos los derechos reservados.
+                                        </p>
+                                        <p style='margin: 0; font-size: 11px; color: #64748b;'>
+                                            León, Nicaragua. Este es un correo automático, por favor no respondas directamente a esta dirección.
+                                        </p>
+                                    </td>
+                                </tr>
+
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </body>
+            </html>";
 
             await _emailService.EnviarCorreoAsync(
                 cliente.Email,
