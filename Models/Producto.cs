@@ -11,20 +11,23 @@ namespace NicaplusApi.Models
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
         public decimal PrecioVenta { get; set; }
-        public decimal PrecioCosto { get; set; } // Representa el "Precio compra"
+        public decimal PrecioCosto { get; set; } 
         public int StockActual { get; set; }
         public int StockMinimo { get; set; }
         public string ImagenUrl { get; set; } = string.Empty;
         public bool EsDigital { get; set; }
+        
+        // --- CONTROL DE INVENTARIO PARA INTANGIBLES ---
+        public bool ControlaStock { get; set; } = true; // Por defecto es true
+
         public bool RequiereServicio { get; set; }
         public bool VisibleEnCatalogo { get; set; }
         public bool EsSuscripcion { get; set; } 
-        public int DiasDuracion { get; set; } = 30; // "Duración"
+        public int DiasDuracion { get; set; } = 30; 
 
-        // --- NUEVOS CAMPOS REQUERIDOS ---
-        public int GarantiaDias { get; set; } = 0; // "Garantía" en días (Ej: 30 días)
-        public string Proveedor { get; set; } = string.Empty; // "Proveedor" (Ej: "Proveedor VIP Latino")
-        public string Estado { get; set; } = "Activo"; // "Estado" (Activo, Pausado, Agotado)
+        public int GarantiaDias { get; set; } = 0; 
+        public string Proveedor { get; set; } = string.Empty; 
+        public string Estado { get; set; } = "Activo"; 
 
         public int? CategoriaId { get; set; }
         public Categoria? Categoria { get; set; }

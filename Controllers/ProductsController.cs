@@ -28,16 +28,16 @@ namespace NicaplusApi.Controllers
         public async Task<ActionResult<IEnumerable<Producto>>> GetCatalogoPublico()
         {
             return await _context.Productos
-                .Where(p => p.VisibleEnCatalogo && (!p.RequiereServicio || p.EsDigital || p.StockActual > 0))
+                .Where(p => p.VisibleEnCatalogo && (!p.RequiereServicio || p.EsDigital || !p.ControlaStock || p.StockActual > 0))
                 .ToListAsync();
         }
 
-        // 3. Obtener alertas de Stock Bajo
+        // 3. Obtener alertas de Stock Bajo (Solo aplica a productos que sí controlan inventario)
         [HttpGet("alertas-stock")]
         public async Task<ActionResult<IEnumerable<Producto>>> GetAlertasStock()
         {
             return await _context.Productos
-                .Where(p => !p.EsDigital && !p.RequiereServicio && p.StockActual <= p.StockMinimo)
+                .Where(p => p.ControlaStock && !p.EsDigital && !p.RequiereServicio && p.StockActual <= p.StockMinimo)
                 .ToListAsync();
         }
 
@@ -45,10 +45,14 @@ namespace NicaplusApi.Controllers
         [HttpPost]
         public async Task<ActionResult<Producto>> CreateProducto([FromBody] Producto producto)
         {
-            if (producto.EsDigital || producto.RequiereServicio)
+            if (producto.EsDigital || producto.RequiereServicio || !producto.ControlaStock)
             {
-                // Conservamos la asignación automática pero respetando si el cliente maneja stock de pantallas
                 producto.StockMinimo = 0; 
+                
+                if (!producto.ControlaStock)
+                {
+                    producto.StockActual = 0; // Forzamos limpieza si no controla inventario numérico
+                }
             }
 
             _context.Productos.Add(producto);
@@ -64,6 +68,12 @@ namespace NicaplusApi.Controllers
             if (id != producto.Id)
             {
                 return BadRequest("El ID del producto no coincide.");
+            }
+
+            if (!producto.ControlaStock)
+            {
+                producto.StockMinimo = 0;
+                producto.StockActual = 0;
             }
 
             _context.Entry(producto).State = EntityState.Modified;
@@ -91,21 +101,18 @@ namespace NicaplusApi.Controllers
             var producto = await _context.Productos.FindAsync(id);
             if (producto == null) return NotFound();
 
-            // Verificamos si tiene historial para decidir si borrar físico o lógico
             var tieneVentas = await _context.DetallesVentas.AnyAsync(d => d.IdProducto == id);
             var tieneSuscripciones = await _context.Suscripciones.AnyAsync(s => s.IdProducto == id);
 
             if (tieneVentas || tieneSuscripciones)
             {
-                // Si tiene historial, no destruimos datos contables: hacemos borrado lógico
                 producto.VisibleEnCatalogo = false;
-                // Si agregaste el campo Activo: producto.Activo = false;
+                producto.Estado = "Pausado";
                 _context.Productos.Update(producto);
                 await _context.SaveChangesAsync();
                 return Ok(new { mensaje = "El producto tiene historial comercial. Se ha ocultado del catálogo y desactivado para nuevas ventas." });
             }
 
-            // Si está completamente limpio, se puede borrar físicamente
             _context.Productos.Remove(producto);
             await _context.SaveChangesAsync();
 

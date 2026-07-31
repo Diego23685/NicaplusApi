@@ -15,8 +15,6 @@ namespace NicaplusApi.Controllers
     public class VentasController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
-        
-        // Zona horaria estándar para Nicaragua
         private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
         public VentasController(ApplicationDbContext context) { _context = context; }
@@ -39,28 +37,32 @@ namespace NicaplusApi.Controllers
             {
                 var ahoraNicaragua = GetNicaraguaTime();
 
-                // CORREGIDO: Forzar hora local comercial de Nicaragua
                 if (venta.FechaVenta == default(DateTime) || venta.FechaVenta.Year == 1)
                 {
                     venta.FechaVenta = ahoraNicaragua;
                 }
 
-                // 1. Guardar la venta inicial para generar el ID automático
                 _context.Ventas.Add(venta);
                 await _context.SaveChangesAsync();
 
-                // 2. Procesar detalles, inventario y registros financieros
+                // Procesar detalles, inventario y registros financieros
                 foreach (var detalle in venta.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalle.IdProducto);
                     if (prod != null)
                     {
-                        // Control de inventario (Físicos)
-                        if (!prod.EsDigital && !prod.RequiereServicio)
+                        // Control de inventario explícito (Productos físicos o lotes cerrados)
+                        if (prod.ControlaStock)
                         {
                             if (prod.StockActual < detalle.Cantidad)
                                 return BadRequest($"Stock insuficiente para: {prod.Nombre}");
+                            
                             prod.StockActual -= detalle.Cantidad;
+                            
+                            if (prod.StockActual <= 0)
+                            {
+                                prod.Estado = "Agotado";
+                            }
                         }
 
                         // Lógica de Suscripciones (Streaming, Licencias)
@@ -69,7 +71,6 @@ namespace NicaplusApi.Controllers
                             if (!venta.IdCliente.HasValue || venta.IdCliente.Value == 0)
                                 return BadRequest($"Operación Denegada: El producto '{prod.Nombre}' requiere obligatoriamente un cliente asociado.");
 
-                            // Pool de perfiles
                             var perfilDisponible = await _context.PerfilesCuentas
                                 .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && !p.Ocupado);
 
@@ -84,7 +85,6 @@ namespace NicaplusApi.Controllers
 
                             detalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN} | Acceso: {perfilDisponible.CorreoCuenta} / {perfilDisponible.PasswordCuenta}";
 
-                            // CORREGIDO: La suscripción hereda los tiempos limpios del huso local del negocio
                             var nuevaSuscripcion = new Suscripcion
                             {
                                 IdCliente = venta.IdCliente.Value,
@@ -103,7 +103,6 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 3. Registrar Movimiento de Caja sincronizado al día real
                 var ingresoCaja = new MovimientoCaja
                 {
                     Fecha = venta.FechaVenta,
@@ -115,7 +114,6 @@ namespace NicaplusApi.Controllers
                 };
                 _context.MovimientosCaja.Add(ingresoCaja);
 
-                // 4. Control de Crédito atado al mismo eje de tiempo
                 if (venta.MetodoPago == "Crédito")
                 {
                     var nuevaCuentaCobrar = new CuentaPorCobrar
@@ -160,21 +158,16 @@ namespace NicaplusApi.Controllers
                 // ==========================================
                 // 1. REVERSIÓN TOTAL DE LA VENTA ANTERIOR
                 // ==========================================
-                
                 foreach (var detalleOrig in ventaOriginal.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
-                    if (prod != null)
+                    if (prod != null && prod.ControlaStock)
                     {
-                        // Devolver stock físico
-                        if (!prod.EsDigital && !prod.RequiereServicio)
-                        {
-                            prod.StockActual += detalleOrig.Cantidad;
-                        }
+                        prod.StockActual += detalleOrig.Cantidad;
+                        if (prod.Estado == "Agotado" && prod.StockActual > 0) prod.Estado = "Activo";
                     }
                 }
 
-                // LIBERACIÓN ESTRICTA DE PERFILES ANTES DE BORRAR SUSCRIPCIONES
                 var suscripcionesViejas = await _context.Suscripciones
                     .Where(s => s.IdCliente == ventaOriginal.IdCliente && s.FechaInicio == ventaOriginal.FechaVenta)
                     .ToListAsync();
@@ -200,7 +193,6 @@ namespace NicaplusApi.Controllers
                 // ==========================================
                 // 2. APLICAR NUEVOS VALORES
                 // ==========================================
-                
                 ventaOriginal.IdCliente = ventaActualizada.IdCliente == 0 ? null : ventaActualizada.IdCliente;
                 ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
                 ventaOriginal.IdUsuario = ventaActualizada.IdUsuario;
@@ -212,12 +204,13 @@ namespace NicaplusApi.Controllers
                     var prod = await _context.Productos.FindAsync(nuevoDetalle.IdProducto);
                     if (prod == null) return BadRequest($"El producto con ID {nuevoDetalle.IdProducto} no existe.");
 
-                    if (!prod.EsDigital && !prod.RequiereServicio)
+                    if (prod.ControlaStock)
                     {
                         if (prod.StockActual < nuevoDetalle.Cantidad)
                             return BadRequest($"Stock insuficiente para: {prod.Nombre}. Disponible: {prod.StockActual}");
                         
                         prod.StockActual -= nuevoDetalle.Cantidad;
+                        if (prod.StockActual <= 0) prod.Estado = "Agotado";
                     }
 
                     if (prod.EsSuscripcion)
@@ -225,7 +218,6 @@ namespace NicaplusApi.Controllers
                         if (!ventaOriginal.IdCliente.HasValue)
                             return BadRequest($"El producto '{prod.Nombre}' requiere un cliente asociado.");
 
-                        // Buscar un perfil verdaderamente libre (acabamos de liberar el anterior, por lo que está elegible si no cambió de producto)
                         var perfilDisponible = await _context.PerfilesCuentas
                             .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && !p.Ocupado);
 
@@ -244,7 +236,7 @@ namespace NicaplusApi.Controllers
                             NombreServicio = prod.Nombre,
                             TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
                             IdProducto = prod.Id,
-                            IdPerfilCuenta = perfilDisponible.Id, // CORREGIDO: Mapear la relación del ID del perfil
+                            IdPerfilCuenta = perfilDisponible.Id,
                             CostoRenovacion = nuevoDetalle.PrecioUnitario,
                             FechaInicio = ventaOriginal.FechaVenta,
                             FechaVencimiento = ventaOriginal.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
@@ -267,7 +259,6 @@ namespace NicaplusApi.Controllers
                 // ==========================================
                 // 3. SINCRONIZACIÓN CONTABLE
                 // ==========================================
-                
                 var movimientoCaja = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
                 if (movimientoCaja != null)
                 {
@@ -331,17 +322,18 @@ namespace NicaplusApi.Controllers
 
                 if (venta == null) return NotFound("La venta no existe.");
 
-                // 1. Devolver Stock Físico
+                // 1. Devolver Stock Controlado
                 foreach (var detalle in venta.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalle.IdProducto);
-                    if (prod != null && !prod.EsDigital && !prod.RequiereServicio)
+                    if (prod != null && prod.ControlaStock)
                     {
                         prod.StockActual += detalle.Cantidad;
+                        if (prod.Estado == "Agotado" && prod.StockActual > 0) prod.Estado = "Activo";
                     }
                 }
 
-                // 2. CORREGIDO: Liberar perfiles vinculados en PerfilesCuentas antes de borrar la suscripción
+                // 2. Liberar perfiles vinculados
                 var suscripciones = await _context.Suscripciones
                     .Where(s => s.IdCliente == venta.IdCliente && s.FechaInicio == venta.FechaVenta)
                     .ToListAsync();
@@ -362,14 +354,12 @@ namespace NicaplusApi.Controllers
 
                 _context.Suscripciones.RemoveRange(suscripciones);
 
-                // 3. Eliminar rastro financiero
                 var movimiento = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
                 if (movimiento != null) _context.MovimientosCaja.Remove(movimiento);
 
                 var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
                 if (cpc != null) _context.CuentasPorCobrar.Remove(cpc);
 
-                // 4. Eliminar la venta y sus detalles de manera atómica
                 _context.DetallesVentas.RemoveRange(venta.Detalles);
                 _context.Ventas.Remove(venta);
 
