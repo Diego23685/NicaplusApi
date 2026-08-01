@@ -45,60 +45,114 @@ namespace NicaplusApi.Controllers
                 _context.Ventas.Add(venta);
                 await _context.SaveChangesAsync();
 
-                // Procesar detalles, inventario y registros financieros
                 foreach (var detalle in venta.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalle.IdProducto);
                     if (prod != null)
                     {
-                        // Control de inventario explícito (Productos físicos o lotes cerrados)
+                        // Control de inventario explícito
                         if (prod.ControlaStock)
                         {
                             if (prod.StockActual < detalle.Cantidad)
                                 return BadRequest($"Stock insuficiente para: {prod.Nombre}");
                             
                             prod.StockActual -= detalle.Cantidad;
-                            
-                            if (prod.StockActual <= 0)
-                            {
-                                prod.Estado = "Agotado";
-                            }
+                            if (prod.StockActual <= 0) prod.Estado = "Agotado";
                         }
 
-                        // Lógica de Suscripciones (Streaming, Licencias)
+                        // Lógica de Suscripciones Optimizada con AccountGroupKey
                         if (prod.EsSuscripcion)
                         {
                             if (!venta.IdCliente.HasValue || venta.IdCliente.Value == 0)
                                 return BadRequest($"Operación Denegada: El producto '{prod.Nombre}' requiere obligatoriamente un cliente asociado.");
 
-                            var perfilDisponible = await _context.PerfilesCuentas
-                                .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && !p.Ocupado);
+                            // 1. Buscamos qué cuenta madre (GroupKey) tiene suficientes pantallas libres para cubrir la CANTIDAD solicitada en ESTE detalle
+                            var grupoValido = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible" && !string.IsNullOrEmpty(p.AccountGroupKey))
+                                .GroupBy(p => p.AccountGroupKey)
+                                .Where(g => g.Count() >= detalle.Cantidad)
+                                .Select(g => g.Key)
+                                .FirstOrDefaultAsync();
 
-                            if (perfilDisponible == null)
+                            // Si no hay ninguna cuenta única que cubra todo el lote, buscamos perfiles sueltos de cualquier grupo
+                            bool usarAgrupacionEstricta = !string.IsNullOrEmpty(grupoValido);
+
+                            List<int> perfilesAGanarIds = new List<int>();
+
+                            if (usarAgrupacionEstricta)
                             {
-                                return BadRequest($"Acción Denegada: No quedan pantallas disponibles en el pool para '{prod.Nombre}'. Ingrese más perfiles en el catálogo antes de facturar.");
+                                // Traemos los IDs del mismo lote/cuenta física
+                                perfilesAGanarIds = await _context.PerfilesCuentas
+                                    .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible" && p.AccountGroupKey == grupoValido)
+                                    .Take(detalle.Cantidad)
+                                    .Select(p => p.Id)
+                                    .ToListAsync();
                             }
 
-                            perfilDisponible.Ocupado = true;
-                            perfilDisponible.IdClienteAsignado = venta.IdCliente.Value;
-                            _context.PerfilesCuentas.Update(perfilDisponible);
+                            // Loop de contingencia por si se metieron hilos concurrentes o no se halló lote único
+                            int intentos = 0;
+                            List<PerfilCuenta> perfilesAsignados = new List<PerfilCuenta>();
 
-                            detalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN} | Acceso: {perfilDisponible.CorreoCuenta} / {perfilDisponible.PasswordCuenta}";
-
-                            var nuevaSuscripcion = new Suscripcion
+                            while (perfilesAsignados.Count < detalle.Cantidad && intentos < 5)
                             {
-                                IdCliente = venta.IdCliente.Value,
-                                NombreServicio = prod.Nombre,
-                                TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
-                                IdProducto = prod.Id,
-                                IdPerfilCuenta = perfilDisponible.Id,
-                                CostoRenovacion = detalle.PrecioUnitario,
-                                FechaInicio = venta.FechaVenta,
-                                FechaVencimiento = venta.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
-                                Estado = "Activa",
-                                DetallesCredenciales = detalle.MetadataDigital
-                            };
-                            _context.Suscripciones.Add(nuevaSuscripcion);
+                                intentos++;
+                                if (!usarAgrupacionEstricta || perfilesAGanarIds.Count < detalle.Cantidad)
+                                {
+                                    // Contingencia: Tomar lo que esté libre del pool general
+                                    perfilesAGanarIds = await _context.PerfilesCuentas
+                                        .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible")
+                                        .Take(detalle.Cantidad - perfilesAsignados.Count)
+                                        .Select(p => p.Id)
+                                        .ToListAsync();
+                                }
+
+                                if (!perfilesAGanarIds.Any()) break;
+
+                                foreach (var perfilId in perfilesAGanarIds)
+                                {
+                                    int filasAfectadas = await _context.PerfilesCuentas
+                                        .Where(p => p.Id == perfilId && !p.Ocupado)
+                                        .ExecuteUpdateAsync(setters => setters
+                                            .SetProperty(p => p.Ocupado, true)
+                                            .SetProperty(p => p.IdClienteAsignado, venta.IdCliente.Value)
+                                            .SetProperty(p => p.EstadoPerfil, "Asignado")
+                                            .SetProperty(p => p.FechaAsignacion, ahoraNicaragua));
+
+                                    if (filasAfectadas > 0)
+                                    {
+                                        var pAsignado = await _context.PerfilesCuentas.FindAsync(perfilId);
+                                        if (pAsignado != null) perfilesAsignados.Add(pAsignado);
+                                    }
+                                }
+                            }
+
+                            if (perfilesAsignados.Count < detalle.Cantidad)
+                            {
+                                return BadRequest($"Acción Denegada: No quedan suficientes pantallas juntas/disponibles para '{prod.Nombre}'.");
+                            }
+
+                            // Construimos los metadatos concatenando las cuentas despachadas
+                            var metadataList = perfilesAsignados.Select(p => $"PERFIL: {p.NombrePerfil} | PIN: {p.PIN} | Acceso: {p.CorreoCuenta} / {p.PasswordCuenta}");
+                            detalle.MetadataDigital = string.Join(" || ", metadataList);
+
+                            // Generamos las suscripciones individuales vinculadas
+                            foreach (var perfil in perfilesAsignados)
+                            {
+                                var nuevaSuscripcion = new Suscripcion
+                                {
+                                    IdCliente = venta.IdCliente.Value,
+                                    NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
+                                    TipoSuscripcion = "Digital",
+                                    IdProducto = prod.Id,
+                                    IdPerfilCuenta = perfil.Id,
+                                    CostoRenovacion = detalle.PrecioUnitario / detalle.Cantidad, // Proporcional si es combo
+                                    FechaInicio = venta.FechaVenta,
+                                    FechaVencimiento = venta.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
+                                    Estado = "Activa",
+                                    DetallesCredenciales = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}"
+                                };
+                                _context.Suscripciones.Add(nuevaSuscripcion);
+                            }
                         }
                     }
                 }
@@ -169,8 +223,8 @@ namespace NicaplusApi.Controllers
                 }
 
                 var suscripcionesViejas = await _context.Suscripciones
-                    .Where(s => s.IdCliente == ventaOriginal.IdCliente && s.FechaInicio == ventaOriginal.FechaVenta)
-                    .ToListAsync();
+                    .Where(s => s.IdProducto != null && _context.DetallesVentas.Where(dv => dv.IdVenta == id).Select(dv => dv.IdProducto).Contains(s.IdProducto.Value)) 
+                    .ToListAsync(); // Selección más segura basada en productos de la venta
 
                 foreach (var suscripcionVieja in suscripcionesViejas)
                 {
@@ -181,6 +235,7 @@ namespace NicaplusApi.Controllers
                         {
                             perfil.Ocupado = false;
                             perfil.IdClienteAsignado = null;
+                            perfil.EstadoPerfil = "Disponible";
                             _context.PerfilesCuentas.Update(perfil);
                         }
                     }
@@ -191,7 +246,7 @@ namespace NicaplusApi.Controllers
                 await _context.SaveChangesAsync(); 
 
                 // ==========================================
-                // 2. APLICAR NUEVOS VALORES
+                // 2. APLICAR NUEVOS VALORES Y RE-ASIGNAR POR LOTES
                 // ==========================================
                 ventaOriginal.IdCliente = ventaActualizada.IdCliente == 0 ? null : ventaActualizada.IdCliente;
                 ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
@@ -218,32 +273,64 @@ namespace NicaplusApi.Controllers
                         if (!ventaOriginal.IdCliente.HasValue)
                             return BadRequest($"El producto '{prod.Nombre}' requiere un cliente asociado.");
 
-                        var perfilDisponible = await _context.PerfilesCuentas
-                            .FirstOrDefaultAsync(p => p.IdProducto == prod.Id && !p.Ocupado);
+                        // Estrategia de agrupación por AccountGroupKey también en la edición
+                        var grupoValido = await _context.PerfilesCuentas
+                            .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible" && !string.IsNullOrEmpty(p.AccountGroupKey))
+                            .GroupBy(p => p.AccountGroupKey)
+                            .Where(g => g.Count() >= nuevoDetalle.Cantidad)
+                            .Select(g => g.Key)
+                            .FirstOrDefaultAsync();
 
-                        if (perfilDisponible == null)
-                            return BadRequest($"No quedan pantallas disponibles en el pool para '{prod.Nombre}'.");
+                        List<PerfilCuenta> perfilesDisponibles;
 
-                        perfilDisponible.Ocupado = true;
-                        perfilDisponible.IdClienteAsignado = ventaOriginal.IdCliente.Value;
-                        _context.PerfilesCuentas.Update(perfilDisponible);
-                        
-                        nuevoDetalle.MetadataDigital = $"PERFIL: {perfilDisponible.NombrePerfil} | PIN: {perfilDisponible.PIN} | Acceso: {perfilDisponible.CorreoCuenta} / {perfilDisponible.PasswordCuenta}";
-
-                        var nuevaSuscripcion = new Suscripcion
+                        if (!string.IsNullOrEmpty(grupoValido))
                         {
-                            IdCliente = ventaOriginal.IdCliente.Value,
-                            NombreServicio = prod.Nombre,
-                            TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
-                            IdProducto = prod.Id,
-                            IdPerfilCuenta = perfilDisponible.Id,
-                            CostoRenovacion = nuevoDetalle.PrecioUnitario,
-                            FechaInicio = ventaOriginal.FechaVenta,
-                            FechaVencimiento = ventaOriginal.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
-                            Estado = "Activa",
-                            DetallesCredenciales = nuevoDetalle.MetadataDigital
-                        };
-                        _context.Suscripciones.Add(nuevaSuscripcion);
+                            perfilesDisponibles = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.AccountGroupKey == grupoValido)
+                                .Take(nuevoDetalle.Cantidad)
+                                .ToListAsync();
+                        }
+                        else
+                        {
+                            perfilesDisponibles = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
+                                .Take(nuevoDetalle.Cantidad)
+                                .ToListAsync();
+                        }
+
+                        if (perfilesDisponibles.Count < nuevoDetalle.Cantidad)
+                            return BadRequest($"No quedan suficientes pantallas disponibles en el pool para '{prod.Nombre}'.");
+
+                        var metadataList = new List<string>();
+
+                        foreach (var perfil in perfilesDisponibles)
+                        {
+                            perfil.Ocupado = true;
+                            perfil.IdClienteAsignado = ventaOriginal.IdCliente.Value;
+                            perfil.EstadoPerfil = "Asignado";
+                            perfil.FechaAsignacion = ventaOriginal.FechaVenta;
+                            _context.PerfilesCuentas.Update(perfil);
+                            
+                            var credencialIndividual = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
+                            metadataList.Add(credencialIndividual);
+
+                            var nuevaSuscripcion = new Suscripcion
+                            {
+                                IdCliente = ventaOriginal.IdCliente.Value,
+                                NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
+                                TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
+                                IdProducto = prod.Id,
+                                IdPerfilCuenta = perfil.Id,
+                                CostoRenovacion = nuevoDetalle.PrecioUnitario / nuevoDetalle.Cantidad,
+                                FechaInicio = ventaOriginal.FechaVenta,
+                                FechaVencimiento = ventaOriginal.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
+                                Estado = "Activa",
+                                DetallesCredenciales = credencialIndividual
+                            };
+                            _context.Suscripciones.Add(nuevaSuscripcion);
+                        }
+
+                        nuevoDetalle.MetadataDigital = string.Join(" || ", metadataList);
                     }
 
                     nuevoDetalle.IdVenta = id;

@@ -23,13 +23,43 @@ namespace NicaplusApi.Controllers
             return await _context.Productos.ToListAsync();
         }
 
-        // 2. Obtener catálogo público (Para la tienda online / WhatsApp)
+        // 2. Obtener catálogo público (Para la tienda online / POS)
         [HttpGet("catalogo")]
-        public async Task<ActionResult<IEnumerable<Producto>>> GetCatalogoPublico()
+        public async Task<ActionResult<IEnumerable<object>>> GetCatalogoPublico()
         {
-            return await _context.Productos
-                .Where(p => p.VisibleEnCatalogo && (!p.RequiereServicio || p.EsDigital || !p.ControlaStock || p.StockActual > 0))
+            var productos = await _context.Productos
+                .Where(p => p.VisibleEnCatalogo && p.Estado == "Activo")
                 .ToListAsync();
+
+            var listaDinamica = new List<object>();
+
+            foreach (var p in productos)
+            {
+                int stockReal = p.StockActual;
+
+                if (p.EsSuscripcion)
+                {
+                    // 🌟 Sincronizado estrictamente con los estados del pipeline de ventas
+                    stockReal = await _context.PerfilesCuentas
+                        .CountAsync(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible");
+                }
+
+                listaDinamica.Add(new
+                {
+                    p.Id,
+                    p.Nombre,
+                    p.Descripcion,
+                    p.PrecioVenta,
+                    p.ImagenUrl,
+                    p.EsDigital,
+                    p.EsSuscripcion,
+                    p.DiasDuracion,
+                    StockActual = stockReal, 
+                    p.VisibleEnCatalogo
+                });
+            }
+
+            return Ok(listaDinamica);
         }
 
         // 3. Obtener alertas de Stock Bajo (Solo aplica a productos que sí controlan inventario)
