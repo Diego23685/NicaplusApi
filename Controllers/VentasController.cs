@@ -61,46 +61,44 @@ namespace NicaplusApi.Controllers
                         }
 
                         // Lógica de Suscripciones Optimizada con AccountGroupKey
+                        // Lógica de Suscripciones Optimizada con AccountGroupKey
                         if (prod.EsSuscripcion)
                         {
                             if (!venta.IdCliente.HasValue || venta.IdCliente.Value == 0)
                                 return BadRequest($"Operación Denegada: El producto '{prod.Nombre}' requiere obligatoriamente un cliente asociado.");
 
-                            // 1. Buscamos qué cuenta madre (GroupKey) tiene suficientes pantallas libres para cubrir la CANTIDAD solicitada en ESTE detalle
+                            // 1. Buscamos qué cuenta madre (GroupKey) tiene suficientes pantallas libres basándonos estrictamente en Ocupado
                             var grupoValido = await _context.PerfilesCuentas
-                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible" && !string.IsNullOrEmpty(p.AccountGroupKey))
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !string.IsNullOrEmpty(p.AccountGroupKey))
                                 .GroupBy(p => p.AccountGroupKey)
                                 .Where(g => g.Count() >= detalle.Cantidad)
                                 .Select(g => g.Key)
                                 .FirstOrDefaultAsync();
 
-                            // Si no hay ninguna cuenta única que cubra todo el lote, buscamos perfiles sueltos de cualquier grupo
                             bool usarAgrupacionEstricta = !string.IsNullOrEmpty(grupoValido);
-
                             List<int> perfilesAGanarIds = new List<int>();
 
                             if (usarAgrupacionEstricta)
                             {
                                 // Traemos los IDs del mismo lote/cuenta física
                                 perfilesAGanarIds = await _context.PerfilesCuentas
-                                    .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible" && p.AccountGroupKey == grupoValido)
+                                    .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.AccountGroupKey == grupoValido)
                                     .Take(detalle.Cantidad)
                                     .Select(p => p.Id)
                                     .ToListAsync();
                             }
 
-                            // Loop de contingencia por si se metieron hilos concurrentes o no se halló lote único
                             int intentos = 0;
                             List<PerfilCuenta> perfilesAsignados = new List<PerfilCuenta>();
 
                             while (perfilesAsignados.Count < detalle.Cantidad && intentos < 5)
                             {
                                 intentos++;
-                                if (!usarAgrupacionEstricta || perfilesAGanarIds.Count < detalle.Cantidad)
+                                if (!usarAgrupacionEstricta || perfilesAGanarIds.Count < (detalle.Cantidad - perfilesAsignados.Count))
                                 {
-                                    // Contingencia: Tomar lo que esté libre del pool general
+                                    // Contingencia: Tomar lo que esté libre del pool general sin importar el string del estado
                                     perfilesAGanarIds = await _context.PerfilesCuentas
-                                        .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible")
+                                        .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
                                         .Take(detalle.Cantidad - perfilesAsignados.Count)
                                         .Select(p => p.Id)
                                         .ToListAsync();
@@ -124,6 +122,9 @@ namespace NicaplusApi.Controllers
                                         if (pAsignado != null) perfilesAsignados.Add(pAsignado);
                                     }
                                 }
+                                
+                                // Limpiamos la lista para la siguiente iteración si hiciera falta
+                                perfilesAGanarIds.Clear();
                             }
 
                             if (perfilesAsignados.Count < detalle.Cantidad)
@@ -145,7 +146,7 @@ namespace NicaplusApi.Controllers
                                     TipoSuscripcion = "Digital",
                                     IdProducto = prod.Id,
                                     IdPerfilCuenta = perfil.Id,
-                                    CostoRenovacion = detalle.PrecioUnitario / detalle.Cantidad, // Proporcional si es combo
+                                    CostoRenovacion = detalle.PrecioUnitario / detalle.Cantidad, 
                                     FechaInicio = venta.FechaVenta,
                                     FechaVencimiento = venta.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
                                     Estado = "Activa",
