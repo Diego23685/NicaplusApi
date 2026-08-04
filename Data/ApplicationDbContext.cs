@@ -48,7 +48,6 @@ namespace NicaplusApi.Data
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
-
             var userIdString = _httpContextAccessor.HttpContext?.User?
                 .FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
@@ -71,14 +70,7 @@ namespace NicaplusApi.Data
                 var datosNuevos = new Dictionary<string, object?>();
                 var datosViejos = new Dictionary<string, object?>();
 
-                var propiedadNombre = entry.CurrentValues.Properties
-                    .FirstOrDefault(p => p.Name.ToLower() == "nombre" || p.Name.ToLower() == "razonsocial");
-
-                if (propiedadNombre != null && entry.State != EntityState.Deleted)
-                {
-                    nombreRegistroAfectado = entry.CurrentValues[propiedadNombre]?.ToString() ?? "Sin nombre";
-                }
-
+                // Llenar diccionarios de auditoría
                 if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
                 {
                     foreach (var prop in entry.CurrentValues.Properties)
@@ -92,6 +84,40 @@ namespace NicaplusApi.Data
                     {
                         datosViejos[prop.Name] = entry.OriginalValues[prop.Name];
                     }
+                }
+
+                // --- CONSTRUCCIÓN DINÁMICA DEL NOMBRE AFECTADO ---
+                var valoresReferencia = entry.State == EntityState.Deleted ? entry.OriginalValues : entry.CurrentValues;
+
+                // 1. Intentar buscar propiedades de texto comunes
+                var propiedadTexto = valoresReferencia.Properties
+                    .FirstOrDefault(p => p.Name.ToLower() == "nombre" 
+                                    || p.Name.ToLower() == "razonsocial" 
+                                    || p.Name.ToLower() == "concepto"
+                                    || p.Name.ToLower() == "descripcion"
+                                    || p.Name.ToLower() == "email");
+
+                if (propiedadTexto != null && valoresReferencia[propiedadTexto] != null)
+                {
+                    nombreRegistroAfectado = valoresReferencia[propiedadTexto]?.ToString() ?? "Sin datos";
+                }
+                else
+                {
+                    // 2. Buscar dinámicamente la propiedad de clave primaria (o "Id")
+                    var propiedadId = valoresReferencia.Properties.FirstOrDefault(p => p.IsPrimaryKey() || p.Name.ToLower() == "id");
+                    var idValor = propiedadId != null ? valoresReferencia[propiedadId]?.ToString() : "N/A";
+
+                    var entidadNombre = entry.Entity.GetType().Name;
+
+                    nombreRegistroAfectado = entidadNombre switch
+                    {
+                        "Venta" => $"Venta #{idValor}",
+                        "DetalleVenta" => $"Detalle de Venta #{idValor}",
+                        "Suscripcion" => $"Suscripción #{idValor}",
+                        "PerfilCuenta" => $"Perfil #{idValor}",
+                        "MovimientoCaja" => $"Movimiento por C${(valoresReferencia.Properties.Any(p => p.Name == "Monto") ? valoresReferencia["Monto"] : idValor)}",
+                        _ => $"{entidadNombre} #{idValor}"
+                    };
                 }
 
                 var metadataDetalle = new
@@ -108,29 +134,15 @@ namespace NicaplusApi.Data
                 };
 
                 // 3. CREACIÓN DIRECTA EN EL TRACKER
-                // Usar Entry().State asegura que EF inserte la entidad en el comando SQL actual que se está preparando
                 var nuevoLog = new LogAuditoria
                 {
-                    IdUsuario = tipoUsuario == "Administrador"
-                        ? int.Parse(userIdString!)
-                        : null,
-
-                    IdCliente = tipoUsuario == "Cliente"
-                        ? int.Parse(userIdString!)
-                        : null,
-
+                    IdUsuario = tipoUsuario == "Administrador" && int.TryParse(userIdString, out var idUser) ? idUser : null,
+                    IdCliente = tipoUsuario == "Cliente" && int.TryParse(userIdString, out var idClient) ? idClient : null,
                     TipoActor = tipoUsuario ?? "Sistema",
-
                     Accion = entry.State.ToString(),
-
                     TablaAfectada = entry.Entity.GetType().Name,
-
                     Detalles = JsonSerializer.Serialize(metadataDetalle),
-
-                    FechaRegistro = DateTime.SpecifyKind(
-                        ahoraNicaragua,
-                        DateTimeKind.Unspecified
-                    )
+                    FechaRegistro = DateTime.SpecifyKind(ahoraNicaragua, DateTimeKind.Unspecified)
                 };
 
                 Entry(nuevoLog).State = EntityState.Added;
