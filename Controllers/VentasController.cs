@@ -1,205 +1,335 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
+using NicaplusApi.DTOs;
 using NicaplusApi.Models;
-using Microsoft.AspNetCore.Authorization;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+using System.Security.Claims;
 
 namespace NicaplusApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize]
     public class VentasController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
-        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+        private readonly ILogger<VentasController> _logger;
 
-        public VentasController(ApplicationDbContext context) { _context = context; }
+        public VentasController(
+            ApplicationDbContext context,
+            ILogger<VentasController> logger)
+        {
+            _context = context;
+            _logger = logger;
+        }
 
         private DateTime GetNicaraguaTime()
         {
-            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
-        }
-
-        [HttpGet]
-        [Authorize(Roles = "Administrador,Socio,Ventas")]
-        public async Task<ActionResult<IEnumerable<Venta>>> Get() => 
-            await _context.Ventas.Include(v => v.Detalles).Include(v => v.Cliente).OrderByDescending(v => v.Id).ToListAsync();
-
-        [HttpPost]
-        public async Task<ActionResult<Venta>> Post([FromBody] Venta venta)
-        {
-            using var transaction = await _context.Database.BeginTransactionAsync();
+            TimeZoneInfo zone;
             try
             {
-                var ahoraNicaragua = GetNicaraguaTime();
+                zone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                zone = TimeZoneInfo.FindSystemTimeZoneById("America/Managua");
+            }
 
-                if (venta.FechaVenta == default(DateTime) || venta.FechaVenta.Year == 1)
-                {
-                    venta.FechaVenta = ahoraNicaragua;
-                }
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+        }
 
-                _context.Ventas.Add(venta);
-                await _context.SaveChangesAsync();
+        private int GetCurrentUserId()
+        {
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            return int.TryParse(userIdClaim, out int id) ? id : 1;
+        }
 
-                foreach (var detalle in venta.Detalles)
-                {
-                    var prod = await _context.Productos.FindAsync(detalle.IdProducto);
-                    if (prod != null)
+        // GET: api/Ventas
+        [HttpGet]
+        [Authorize(Roles = "Administrador,Socio,Ventas")]
+        public async Task<IActionResult> Get()
+        {
+            try
+            {
+                var ventas = await _context.Ventas
+                    .AsNoTracking()
+                    .Include(v => v.Cliente)
+                    .Include(v => v.Usuario)
+                    .Include(v => v.Detalles!)
+                        .ThenInclude(d => d.Producto)
+                    .OrderByDescending(v => v.Id)
+                    .Select(v => new VentaResumenDto
                     {
-                        // Control de inventario explícito
-                        if (prod.ControlaStock)
+                        Id = v.Id,
+                        FechaVenta = v.FechaVenta.ToString("yyyy-MM-dd HH:mm:ss"),
+                        IdCliente = v.IdCliente,
+                        ClienteNombre = v.Cliente != null ? v.Cliente.Nombre : "Cliente General / Público",
+                        Operador = v.Usuario != null ? v.Usuario.Nombre : "Sistema",
+                        MetodoPago = v.MetodoPago,
+                        Total = v.Total,
+                        Detalles = v.Detalles.Select(d => new DetalleVentaResumenDto
                         {
-                            if (prod.StockActual < detalle.Cantidad)
-                                return BadRequest($"Stock insuficiente para: {prod.Nombre}");
-                            
-                            prod.StockActual -= detalle.Cantidad;
-                            if (prod.StockActual <= 0) prod.Estado = "Agotado";
-                        }
+                            Id = d.Id,
+                            IdProducto = d.IdProducto,
+                            ProductoNombre = d.Producto != null ? d.Producto.Nombre : "Producto General",
+                            Cantidad = d.Cantidad,
+                            PrecioUnitario = d.PrecioUnitario,
+                            Descuento = d.Descuento,
+                            SubTotal = d.SubTotal,
+                            MetadataDigital = d.MetadataDigital ?? string.Empty
+                        }).ToList()
+                    })
+                    .ToListAsync();
 
-                        // Lógica de Suscripciones Optimizada con AccountGroupKey
-                        // Lógica de Suscripciones Optimizada con AccountGroupKey
-                        if (prod.EsSuscripcion)
-                        {
-                            if (!venta.IdCliente.HasValue || venta.IdCliente.Value == 0)
-                                return BadRequest($"Operación Denegada: El producto '{prod.Nombre}' requiere obligatoriamente un cliente asociado.");
+                return Ok(ventas);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener la lista de ventas.");
+                return StatusCode(500, new { mensaje = "Error interno al consultar las ventas." });
+            }
+        }
 
-                            // 1. Buscamos qué cuenta madre (GroupKey) tiene suficientes pantallas libres basándonos estrictamente en Ocupado
-                            var grupoValido = await _context.PerfilesCuentas
-                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !string.IsNullOrEmpty(p.AccountGroupKey))
-                                .GroupBy(p => p.AccountGroupKey)
-                                .Where(g => g.Count() >= detalle.Cantidad)
-                                .Select(g => g.Key)
-                                .FirstOrDefaultAsync();
-
-                            bool usarAgrupacionEstricta = !string.IsNullOrEmpty(grupoValido);
-                            List<int> perfilesAGanarIds = new List<int>();
-
-                            if (usarAgrupacionEstricta)
-                            {
-                                // Traemos los IDs del mismo lote/cuenta física
-                                perfilesAGanarIds = await _context.PerfilesCuentas
-                                    .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.AccountGroupKey == grupoValido)
-                                    .Take(detalle.Cantidad)
-                                    .Select(p => p.Id)
-                                    .ToListAsync();
-                            }
-
-                            int intentos = 0;
-                            List<PerfilCuenta> perfilesAsignados = new List<PerfilCuenta>();
-
-                            while (perfilesAsignados.Count < detalle.Cantidad && intentos < 5)
-                            {
-                                intentos++;
-                                if (!usarAgrupacionEstricta || perfilesAGanarIds.Count < (detalle.Cantidad - perfilesAsignados.Count))
-                                {
-                                    // Contingencia: Tomar lo que esté libre del pool general sin importar el string del estado
-                                    perfilesAGanarIds = await _context.PerfilesCuentas
-                                        .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
-                                        .Take(detalle.Cantidad - perfilesAsignados.Count)
-                                        .Select(p => p.Id)
-                                        .ToListAsync();
-                                }
-
-                                if (!perfilesAGanarIds.Any()) break;
-
-                                foreach (var perfilId in perfilesAGanarIds)
-                                {
-                                    int filasAfectadas = await _context.PerfilesCuentas
-                                        .Where(p => p.Id == perfilId && !p.Ocupado)
-                                        .ExecuteUpdateAsync(setters => setters
-                                            .SetProperty(p => p.Ocupado, true)
-                                            .SetProperty(p => p.IdClienteAsignado, venta.IdCliente.Value)
-                                            .SetProperty(p => p.EstadoPerfil, "Asignado")
-                                            .SetProperty(p => p.FechaAsignacion, ahoraNicaragua));
-
-                                    if (filasAfectadas > 0)
-                                    {
-                                        var pAsignado = await _context.PerfilesCuentas.FindAsync(perfilId);
-                                        if (pAsignado != null) perfilesAsignados.Add(pAsignado);
-                                    }
-                                }
-                                
-                                // Limpiamos la lista para la siguiente iteración si hiciera falta
-                                perfilesAGanarIds.Clear();
-                            }
-
-                            if (perfilesAsignados.Count < detalle.Cantidad)
-                            {
-                                return BadRequest($"Acción Denegada: No quedan suficientes pantallas juntas/disponibles para '{prod.Nombre}'.");
-                            }
-
-                            // Construimos los metadatos concatenando las cuentas despachadas
-                            var metadataList = perfilesAsignados.Select(p => $"PERFIL: {p.NombrePerfil} | PIN: {p.PIN} | Acceso: {p.CorreoCuenta} / {p.PasswordCuenta}");
-                            detalle.MetadataDigital = string.Join(" || ", metadataList);
-
-                            // Generamos las suscripciones individuales vinculadas
-                            foreach (var perfil in perfilesAsignados)
-                            {
-                                var nuevaSuscripcion = new Suscripcion
-                                {
-                                    IdCliente = venta.IdCliente.Value,
-                                    NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
-                                    TipoSuscripcion = "Digital",
-                                    IdProducto = prod.Id,
-                                    IdPerfilCuenta = perfil.Id,
-                                    CostoRenovacion = detalle.PrecioUnitario / detalle.Cantidad, 
-                                    FechaInicio = venta.FechaVenta,
-                                    FechaVencimiento = venta.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
-                                    Estado = "Activa",
-                                    DetallesCredenciales = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}"
-                                };
-                                _context.Suscripciones.Add(nuevaSuscripcion);
-                            }
-                        }
-                    }
-                }
-
-                var ingresoCaja = new MovimientoCaja
-                {
-                    Fecha = venta.FechaVenta,
-                    Tipo = "Ingreso",
-                    Concepto = "Venta",
-                    Monto = venta.Total,
-                    Detalle = $"Facturación de Orden #{venta.Id}. Método: {venta.MetodoPago}",
-                    IdVenta = venta.Id 
-                };
-                _context.MovimientosCaja.Add(ingresoCaja);
-
-                if (venta.MetodoPago == "Crédito")
-                {
-                    var nuevaCuentaCobrar = new CuentaPorCobrar
+        // GET: api/Ventas/5
+        [HttpGet("{id}")]
+        [Authorize(Roles = "Administrador,Socio,Ventas")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            try
+            {
+                var venta = await _context.Ventas
+                    .AsNoTracking()
+                    .Include(v => v.Cliente)
+                    .Include(v => v.Usuario)
+                    .Include(v => v.Detalles!)
+                        .ThenInclude(d => d.Producto)
+                    .Where(v => v.Id == id)
+                    .Select(v => new VentaResumenDto
                     {
-                        IdCliente = venta.IdCliente!.Value,
-                        IdVenta = venta.Id,
-                        MontoTotal = venta.Total,
-                        SaldoPendiente = venta.Total,
-                        FechaEmision = venta.FechaVenta,
-                        FechaVencimiento = venta.FechaVencimientoCreditoManual ?? venta.FechaVenta.AddDays(15),
-                        Estado = "Pendiente"
-                    };
-                    _context.CuentasPorCobrar.Add(nuevaCuentaCobrar);
-                }
+                        Id = v.Id,
+                        FechaVenta = v.FechaVenta.ToString("yyyy-MM-dd HH:mm:ss"),
+                        IdCliente = v.IdCliente,
+                        ClienteNombre = v.Cliente != null ? v.Cliente.Nombre : "Cliente General / Público",
+                        Operador = v.Usuario != null ? v.Usuario.Nombre : "Sistema",
+                        MetodoPago = v.MetodoPago,
+                        Total = v.Total,
+                        Detalles = v.Detalles.Select(d => new DetalleVentaResumenDto
+                        {
+                            Id = d.Id,
+                            IdProducto = d.IdProducto,
+                            ProductoNombre = d.Producto != null ? d.Producto.Nombre : "Producto General",
+                            Cantidad = d.Cantidad,
+                            PrecioUnitario = d.PrecioUnitario,
+                            Descuento = d.Descuento,
+                            SubTotal = d.SubTotal,
+                            MetadataDigital = d.MetadataDigital ?? string.Empty
+                        }).ToList()
+                    })
+                    .FirstOrDefaultAsync();
 
-                await _context.SaveChangesAsync();
-                await transaction.CommitAsync();
+                if (venta == null)
+                    return NotFound(new { mensaje = "Venta no encontrada." });
+
                 return Ok(venta);
             }
             catch (Exception ex)
             {
-                await transaction.RollbackAsync();
-                return StatusCode(500, $"Error interno: {ex.Message}");
+                _logger.LogError(ex, "Error al obtener la venta #{Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al consultar la venta." });
             }
         }
 
+        // POST: api/Ventas
+        [HttpPost]
+        [Authorize(Roles = "Administrador,Socio,Ventas")]
+        public async Task<IActionResult> Post([FromBody] CrearVentaDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                var ahoraNicaragua = GetNicaraguaTime();
+                int idOperador = GetCurrentUserId();
+
+                int? idClienteFinal = (dto.IdCliente.HasValue && dto.IdCliente.Value > 0) ? dto.IdCliente : null;
+
+                if (dto.MetodoPago == "Crédito" && !idClienteFinal.HasValue)
+                {
+                    return BadRequest(new { mensaje = "Las ventas al crédito requieren obligatoriamente un cliente registrado." });
+                }
+
+                var nuevaVenta = new Venta
+                {
+                    FechaVenta = ahoraNicaragua,
+                    IdCliente = idClienteFinal,
+                    IdUsuario = idOperador,
+                    MetodoPago = dto.MetodoPago.Trim(),
+                    Total = 0m // Se calcula acumulativamente
+                };
+
+                _context.Ventas.Add(nuevaVenta);
+                await _context.SaveChangesAsync(); // Se persiste para obtener el ID de venta
+
+                decimal totalAcumulado = 0m;
+
+                foreach (var itemDto in dto.Detalles)
+                {
+                    var prod = await _context.Productos.FindAsync(itemDto.IdProducto);
+                    if (prod == null)
+                        return BadRequest(new { mensaje = $"El producto con ID {itemDto.IdProducto} no existe." });
+
+                    // 1. Control de Inventario
+                    if (prod.ControlaStock)
+                    {
+                        if (prod.StockActual < itemDto.Cantidad)
+                            return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre}. Disponible: {prod.StockActual}" });
+
+                        prod.StockActual -= itemDto.Cantidad;
+                        if (prod.StockActual <= 0) prod.Estado = "Agotado";
+                    }
+
+                    var detalleVenta = new DetalleVenta
+                    {
+                        IdVenta = nuevaVenta.Id,
+                        IdProducto = prod.Id,
+                        Cantidad = itemDto.Cantidad,
+                        PrecioUnitario = itemDto.PrecioUnitario,
+                        Descuento = itemDto.Descuento,
+                        SubTotal = (itemDto.Cantidad * itemDto.PrecioUnitario) - itemDto.Descuento
+                    };
+
+                    // 2. Lógica de Servicios Digitales y Suscripciones por AccountGroupKey
+                    if (prod.EsSuscripcion)
+                    {
+                        if (!idClienteFinal.HasValue)
+                            return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente asignar un cliente." });
+
+                        // Estrategia de agrupación por AccountGroupKey (Misma cuenta madre)
+                        var grupoValido = await _context.PerfilesCuentas
+                            .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !string.IsNullOrEmpty(p.AccountGroupKey))
+                            .GroupBy(p => p.AccountGroupKey)
+                            .Where(g => g.Count() >= itemDto.Cantidad)
+                            .Select(g => g.Key)
+                            .FirstOrDefaultAsync();
+
+                        List<PerfilCuenta> perfilesAsignados = new List<PerfilCuenta>();
+
+                        if (!string.IsNullOrEmpty(grupoValido))
+                        {
+                            perfilesAsignados = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.AccountGroupKey == grupoValido)
+                                .Take(itemDto.Cantidad)
+                                .ToListAsync();
+                        }
+                        else
+                        {
+                            // Contingencia: Tomar pantallas disponibles del pool general
+                            perfilesAsignados = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
+                                .Take(itemDto.Cantidad)
+                                .ToListAsync();
+                        }
+
+                        if (perfilesAsignados.Count < itemDto.Cantidad)
+                        {
+                            return BadRequest(new { mensaje = $"No existen suficientes pantallas/perfiles disponibles para '{prod.Nombre}'." });
+                        }
+
+                        var metadataList = new List<string>();
+
+                        foreach (var perfil in perfilesAsignados)
+                        {
+                            perfil.Ocupado = true;
+                            perfil.IdClienteAsignado = idClienteFinal.Value;
+                            perfil.EstadoPerfil = "Asignado";
+                            perfil.FechaAsignacion = ahoraNicaragua;
+                            _context.PerfilesCuentas.Update(perfil);
+
+                            var credencial = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
+                            metadataList.Add(credencial);
+
+                            var suscripcion = new Suscripcion
+                            {
+                                IdCliente = idClienteFinal.Value,
+                                NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
+                                TipoSuscripcion = "Digital",
+                                IdProducto = prod.Id,
+                                IdPerfilCuenta = perfil.Id,
+                                CostoRenovacion = itemDto.PrecioUnitario,
+                                FechaInicio = ahoraNicaragua,
+                                FechaVencimiento = ahoraNicaragua.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
+                                Estado = "Activa",
+                                DetallesCredenciales = credencial
+                            };
+                            _context.Suscripciones.Add(suscripcion);
+                        }
+
+                        detalleVenta.MetadataDigital = string.Join(" || ", metadataList);
+                    }
+
+                    _context.DetallesVentas.Add(detalleVenta);
+                    totalAcumulado += detalleVenta.SubTotal;
+                }
+
+                nuevaVenta.Total = totalAcumulado;
+                _context.Ventas.Update(nuevaVenta);
+
+                // 3. Registrar Movimiento Contable en Caja
+                var movimientoCaja = new MovimientoCaja
+                {
+                    Fecha = ahoraNicaragua,
+                    Tipo = "Ingreso",
+                    Concepto = "Venta",
+                    Monto = totalAcumulado,
+                    Detalle = $"Facturación de Orden #{nuevaVenta.Id}. Método: {nuevaVenta.MetodoPago}",
+                    IdVenta = nuevaVenta.Id
+                };
+                _context.MovimientosCaja.Add(movimientoCaja);
+
+                // 4. Registro de Crédito si aplica
+                if (nuevaVenta.MetodoPago == "Crédito" && idClienteFinal.HasValue)
+                {
+                    var cpc = new CuentaPorCobrar
+                    {
+                        IdCliente = idClienteFinal.Value,
+                        IdVenta = nuevaVenta.Id,
+                        MontoTotal = totalAcumulado,
+                        SaldoPendiente = totalAcumulado,
+                        FechaEmision = ahoraNicaragua,
+                        FechaVencimiento = dto.FechaVencimientoCreditoManual ?? ahoraNicaragua.AddDays(15),
+                        Estado = "Pendiente"
+                    };
+                    _context.CuentasPorCobrar.Add(cpc);
+                }
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return CreatedAtAction(nameof(GetById), new { id = nuevaVenta.Id }, new
+                {
+                    mensaje = "Venta registrada con éxito.",
+                    idVenta = nuevaVenta.Id,
+                    total = totalAcumulado
+                });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "Error al procesar el registro de venta.");
+                return StatusCode(500, new { mensaje = "Error interno al procesar la transacción de venta." });
+            }
+        }
+
+        // PUT: api/Ventas/5
         [HttpPut("{id}")]
         [Authorize(Roles = "Administrador")]
-        public async Task<IActionResult> Put(int id, [FromBody] Venta ventaActualizada)
+        public async Task<IActionResult> Put(int id, [FromBody] ActualizarVentaDto dto)
         {
-            if (id != ventaActualizada.Id) return BadRequest("IDs no coinciden.");
+            if (id != dto.Id)
+                return BadRequest(new { mensaje = "El ID de la URL no coincide con el cuerpo de la solicitud." });
 
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
@@ -207,8 +337,12 @@ namespace NicaplusApi.Controllers
                 var ventaOriginal = await _context.Ventas
                     .Include(v => v.Detalles)
                     .FirstOrDefaultAsync(v => v.Id == id);
-                
-                if (ventaOriginal == null) return NotFound("Venta no encontrada.");
+
+                if (ventaOriginal == null)
+                    return NotFound(new { mensaje = "La venta especificada no existe." });
+
+                var ahoraNicaragua = GetNicaraguaTime();
+                int? idClienteFinal = (dto.IdCliente.HasValue && dto.IdCliente.Value > 0) ? dto.IdCliente : null;
 
                 // ==========================================
                 // 1. REVERSIÓN TOTAL DE LA VENTA ANTERIOR
@@ -223,15 +357,16 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
+                // Reversión limpia de Suscripciones y Perfiles asociados
                 var suscripcionesViejas = await _context.Suscripciones
-                    .Where(s => s.IdProducto != null && _context.DetallesVentas.Where(dv => dv.IdVenta == id).Select(dv => dv.IdProducto).Contains(s.IdProducto.Value)) 
-                    .ToListAsync(); // Selección más segura basada en productos de la venta
+                    .Where(s => s.IdCliente == ventaOriginal.IdCliente && s.FechaInicio == ventaOriginal.FechaVenta)
+                    .ToListAsync();
 
-                foreach (var suscripcionVieja in suscripcionesViejas)
+                foreach (var sus in suscripcionesViejas)
                 {
-                    if (suscripcionVieja.IdPerfilCuenta.HasValue)
+                    if (sus.IdPerfilCuenta.HasValue)
                     {
-                        var perfil = await _context.PerfilesCuentas.FindAsync(suscripcionVieja.IdPerfilCuenta.Value);
+                        var perfil = await _context.PerfilesCuentas.FindAsync(sus.IdPerfilCuenta.Value);
                         if (perfil != null)
                         {
                             perfil.Ocupado = false;
@@ -244,41 +379,50 @@ namespace NicaplusApi.Controllers
 
                 _context.Suscripciones.RemoveRange(suscripcionesViejas);
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
-                await _context.SaveChangesAsync(); 
+                await _context.SaveChangesAsync();
 
                 // ==========================================
-                // 2. APLICAR NUEVOS VALORES Y RE-ASIGNAR POR LOTES
+                // 2. APLICACIÓN DE NUEVOS VALORES Y RE-ASIGNACIÓN
                 // ==========================================
-                ventaOriginal.IdCliente = ventaActualizada.IdCliente == 0 ? null : ventaActualizada.IdCliente;
-                ventaOriginal.MetodoPago = ventaActualizada.MetodoPago;
-                ventaOriginal.IdUsuario = ventaActualizada.IdUsuario;
+                ventaOriginal.IdCliente = idClienteFinal;
+                ventaOriginal.MetodoPago = dto.MetodoPago.Trim();
 
-                decimal nuevoTotalCalculado = 0;
+                decimal nuevoTotalCalculado = 0m;
 
-                foreach (var nuevoDetalle in ventaActualizada.Detalles)
+                foreach (var itemDto in dto.Detalles)
                 {
-                    var prod = await _context.Productos.FindAsync(nuevoDetalle.IdProducto);
-                    if (prod == null) return BadRequest($"El producto con ID {nuevoDetalle.IdProducto} no existe.");
+                    var prod = await _context.Productos.FindAsync(itemDto.IdProducto);
+                    if (prod == null)
+                        return BadRequest(new { mensaje = $"El producto con ID {itemDto.IdProducto} no existe." });
 
                     if (prod.ControlaStock)
                     {
-                        if (prod.StockActual < nuevoDetalle.Cantidad)
-                            return BadRequest($"Stock insuficiente para: {prod.Nombre}. Disponible: {prod.StockActual}");
-                        
-                        prod.StockActual -= nuevoDetalle.Cantidad;
+                        if (prod.StockActual < itemDto.Cantidad)
+                            return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre}. Disponible: {prod.StockActual}" });
+
+                        prod.StockActual -= itemDto.Cantidad;
                         if (prod.StockActual <= 0) prod.Estado = "Agotado";
                     }
 
+                    var nuevoDetalle = new DetalleVenta
+                    {
+                        IdVenta = id,
+                        IdProducto = prod.Id,
+                        Cantidad = itemDto.Cantidad,
+                        PrecioUnitario = itemDto.PrecioUnitario,
+                        Descuento = itemDto.Descuento,
+                        SubTotal = (itemDto.Cantidad * itemDto.PrecioUnitario) - itemDto.Descuento
+                    };
+
                     if (prod.EsSuscripcion)
                     {
-                        if (!ventaOriginal.IdCliente.HasValue)
-                            return BadRequest($"El producto '{prod.Nombre}' requiere un cliente asociado.");
+                        if (!idClienteFinal.HasValue)
+                            return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // Estrategia de agrupación por AccountGroupKey también en la edición
                         var grupoValido = await _context.PerfilesCuentas
-                            .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.EstadoPerfil == "Disponible" && !string.IsNullOrEmpty(p.AccountGroupKey))
+                            .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !string.IsNullOrEmpty(p.AccountGroupKey))
                             .GroupBy(p => p.AccountGroupKey)
-                            .Where(g => g.Count() >= nuevoDetalle.Cantidad)
+                            .Where(g => g.Count() >= itemDto.Cantidad)
                             .Select(g => g.Key)
                             .FirstOrDefaultAsync();
 
@@ -288,45 +432,45 @@ namespace NicaplusApi.Controllers
                         {
                             perfilesDisponibles = await _context.PerfilesCuentas
                                 .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.AccountGroupKey == grupoValido)
-                                .Take(nuevoDetalle.Cantidad)
+                                .Take(itemDto.Cantidad)
                                 .ToListAsync();
                         }
                         else
                         {
                             perfilesDisponibles = await _context.PerfilesCuentas
                                 .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
-                                .Take(nuevoDetalle.Cantidad)
+                                .Take(itemDto.Cantidad)
                                 .ToListAsync();
                         }
 
-                        if (perfilesDisponibles.Count < nuevoDetalle.Cantidad)
-                            return BadRequest($"No quedan suficientes pantallas disponibles en el pool para '{prod.Nombre}'.");
+                        if (perfilesDisponibles.Count < itemDto.Cantidad)
+                            return BadRequest(new { mensaje = $"No existen suficientes pantallas disponibles para '{prod.Nombre}'." });
 
                         var metadataList = new List<string>();
 
                         foreach (var perfil in perfilesDisponibles)
                         {
                             perfil.Ocupado = true;
-                            perfil.IdClienteAsignado = ventaOriginal.IdCliente.Value;
+                            perfil.IdClienteAsignado = idClienteFinal.Value;
                             perfil.EstadoPerfil = "Asignado";
-                            perfil.FechaAsignacion = ventaOriginal.FechaVenta;
+                            perfil.FechaAsignacion = ahoraNicaragua;
                             _context.PerfilesCuentas.Update(perfil);
-                            
-                            var credencialIndividual = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
-                            metadataList.Add(credencialIndividual);
+
+                            var credencial = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
+                            metadataList.Add(credencial);
 
                             var nuevaSuscripcion = new Suscripcion
                             {
-                                IdCliente = ventaOriginal.IdCliente.Value,
+                                IdCliente = idClienteFinal.Value,
                                 NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
-                                TipoSuscripcion = prod.EsDigital ? "Digital" : "Físico",
+                                TipoSuscripcion = "Digital",
                                 IdProducto = prod.Id,
                                 IdPerfilCuenta = perfil.Id,
-                                CostoRenovacion = nuevoDetalle.PrecioUnitario / nuevoDetalle.Cantidad,
+                                CostoRenovacion = itemDto.PrecioUnitario,
                                 FechaInicio = ventaOriginal.FechaVenta,
                                 FechaVencimiento = ventaOriginal.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
                                 Estado = "Activa",
-                                DetallesCredenciales = credencialIndividual
+                                DetallesCredenciales = credencial
                             };
                             _context.Suscripciones.Add(nuevaSuscripcion);
                         }
@@ -334,15 +478,12 @@ namespace NicaplusApi.Controllers
                         nuevoDetalle.MetadataDigital = string.Join(" || ", metadataList);
                     }
 
-                    nuevoDetalle.IdVenta = id;
-                    nuevoDetalle.Id = 0;
-                    nuevoDetalle.SubTotal = (nuevoDetalle.Cantidad * nuevoDetalle.PrecioUnitario) - nuevoDetalle.Descuento;
-                    nuevoTotalCalculado += nuevoDetalle.SubTotal;
-
                     _context.DetallesVentas.Add(nuevoDetalle);
+                    nuevoTotalCalculado += nuevoDetalle.SubTotal;
                 }
 
                 ventaOriginal.Total = nuevoTotalCalculado;
+                _context.Ventas.Update(ventaOriginal);
 
                 // ==========================================
                 // 3. SINCRONIZACIÓN CONTABLE
@@ -356,11 +497,11 @@ namespace NicaplusApi.Controllers
                 }
 
                 var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
-                if (ventaOriginal.MetodoPago == "Crédito" && ventaOriginal.IdCliente.HasValue)
+                if (ventaOriginal.MetodoPago == "Crédito" && idClienteFinal.HasValue)
                 {
                     if (cpc != null)
                     {
-                        cpc.IdCliente = ventaOriginal.IdCliente.Value;
+                        cpc.IdCliente = idClienteFinal.Value;
                         cpc.MontoTotal = nuevoTotalCalculado;
                         cpc.SaldoPendiente = nuevoTotalCalculado;
                         _context.CuentasPorCobrar.Update(cpc);
@@ -369,12 +510,12 @@ namespace NicaplusApi.Controllers
                     {
                         _context.CuentasPorCobrar.Add(new CuentaPorCobrar
                         {
-                            IdCliente = ventaOriginal.IdCliente.Value,
+                            IdCliente = idClienteFinal.Value,
                             IdVenta = id,
                             MontoTotal = nuevoTotalCalculado,
                             SaldoPendiente = nuevoTotalCalculado,
                             FechaEmision = ventaOriginal.FechaVenta,
-                            FechaVencimiento = ventaOriginal.FechaVenta.AddDays(15),
+                            FechaVencimiento = dto.FechaVencimientoCreditoManual ?? ventaOriginal.FechaVenta.AddDays(15),
                             Estado = "Pendiente"
                         });
                     }
@@ -384,19 +525,20 @@ namespace NicaplusApi.Controllers
                     _context.CuentasPorCobrar.Remove(cpc);
                 }
 
-                _context.Ventas.Update(ventaOriginal);
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
-                
-                return NoContent();
+
+                return Ok(new { mensaje = "Venta y registros contables asociados actualizados exitosamente." });
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, $"Error en auditoría: {ex.Message}");
+                _logger.LogError(ex, "Error editando la venta #{Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al editar la orden de venta." });
             }
         }
 
+        // DELETE: api/Ventas/5
         [HttpDelete("{id}")]
         [Authorize(Roles = "Administrador")]
         public async Task<IActionResult> Delete(int id)
@@ -408,9 +550,10 @@ namespace NicaplusApi.Controllers
                     .Include(v => v.Detalles)
                     .FirstOrDefaultAsync(v => v.Id == id);
 
-                if (venta == null) return NotFound("La venta no existe.");
+                if (venta == null)
+                    return NotFound(new { mensaje = "La venta no existe." });
 
-                // 1. Devolver Stock Controlado
+                // 1. Devolución de Stock
                 foreach (var detalle in venta.Detalles)
                 {
                     var prod = await _context.Productos.FindAsync(detalle.IdProducto);
@@ -421,10 +564,18 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 2. Liberar perfiles vinculados
-                var suscripciones = await _context.Suscripciones
-                    .Where(s => s.IdCliente == venta.IdCliente && s.FechaInicio == venta.FechaVenta)
-                    .ToListAsync();
+                // 2. Liberación de Perfiles y Eliminación de Suscripciones
+                List<Suscripcion> suscripciones;
+                if (venta.IdCliente.HasValue)
+                {
+                    suscripciones = await _context.Suscripciones
+                        .Where(s => s.IdCliente == venta.IdCliente.Value && s.FechaInicio == venta.FechaVenta)
+                        .ToListAsync();
+                }
+                else
+                {
+                    suscripciones = new List<Suscripcion>();
+                }
 
                 foreach (var sus in suscripciones)
                 {
@@ -435,18 +586,29 @@ namespace NicaplusApi.Controllers
                         {
                             perfil.Ocupado = false;
                             perfil.IdClienteAsignado = null;
+                            perfil.EstadoPerfil = "Disponible";
                             _context.PerfilesCuentas.Update(perfil);
                         }
                     }
                 }
 
-                _context.Suscripciones.RemoveRange(suscripciones);
+                if (suscripciones.Any())
+                {
+                    _context.Suscripciones.RemoveRange(suscripciones);
+                }
 
+                // 3. Limpieza de Movimientos de Caja y Cuentas por Cobrar
                 var movimiento = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
-                if (movimiento != null) _context.MovimientosCaja.Remove(movimiento);
+                if (movimiento != null)
+                {
+                    _context.MovimientosCaja.Remove(movimiento);
+                }
 
                 var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
-                if (cpc != null) _context.CuentasPorCobrar.Remove(cpc);
+                if (cpc != null)
+                {
+                    _context.CuentasPorCobrar.Remove(cpc);
+                }
 
                 _context.DetallesVentas.RemoveRange(venta.Detalles);
                 _context.Ventas.Remove(venta);
@@ -454,12 +616,13 @@ namespace NicaplusApi.Controllers
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                return NoContent();
+                return Ok(new { mensaje = $"Venta #{id} eliminada y sus efectos contables/inventario revertidos." });
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, $"Error al eliminar la venta: {ex.Message}");
+                _logger.LogError(ex, "Error al eliminar la venta #{Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al cancelar y eliminar la venta." });
             }
         }
     }

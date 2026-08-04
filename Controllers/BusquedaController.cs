@@ -11,44 +11,86 @@ namespace NicaplusApi.Controllers
     public class BusquedaController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
-        public BusquedaController(ApplicationDbContext context) => _context = context;
+        private readonly ILogger<BusquedaController> _logger;
+
+        public BusquedaController(
+            ApplicationDbContext context,
+            ILogger<BusquedaController> logger)
+        {
+            _context = context;
+            _logger = logger;
+        }
 
         [HttpGet("universal")]
         public async Task<IActionResult> Buscar([FromQuery] string query)
         {
-            if (string.IsNullOrWhiteSpace(query)) return BadRequest("Consulta vacía.");
-            query = query.ToLower().Trim();
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return BadRequest(new { mensaje = "El término de búsqueda no puede estar vacío." });
+            }
 
-            // CASO 1: Búsqueda de Clientes (Muestra historial completo del cliente)
-            var clientes = await _context.Clientes
-                .Where(c => c.Nombre.ToLower().Contains(query) || c.Telefono.Contains(query))
-                .Select(c => new {
-                    Tipo = "Cliente",
-                    c.Nombre,
-                    c.Telefono,
-                    HistorialCompras = _context.Ventas.Where(v => v.IdCliente == c.Id).ToList(),
-                    ServiciosActivos = _context.Suscripciones.Where(s => s.IdCliente == c.Id && s.Estado == "Activa").ToList()
-                }).ToListAsync();
+            try
+            {
+                var queryLimpia = query.Trim().ToLower();
 
-            // CASO 2: Búsqueda de Cuentas / Perfiles (Muestra cuentas ligadas al término, ej: "Netflix")
-            var perfilesCuentas = await _context.PerfilesCuentas
-                .Include(p => p.Producto)
-                .Where(p => p.Producto!.Nombre.ToLower().Contains(query) || p.CorreoCuenta.ToLower().Contains(query))
-                .Select(p => new {
-                    Tipo = "Cuenta/Perfil",
-                    Servicio = p.Producto!.Nombre,
-                    p.NombrePerfil,
-                    p.CorreoCuenta,
-                    p.Ocupado,
-                    Clave = p.PasswordCuenta,
-                    p.PIN
-                }).ToListAsync();
+                // 1. Búsqueda de Clientes (Optimizada en 1 sola consulta SQL usando proyecciones y paginado límite)
+                var clientes = await _context.Clientes
+                    .AsNoTracking()
+                    .Where(c => c.Nombre.ToLower().Contains(queryLimpia) || c.Telefono.Contains(queryLimpia))
+                    .Take(25) // Evitamos sobrecargas limitando a 25 coincidencias
+                    .Select(c => new
+                    {
+                        Tipo = "Cliente",
+                        c.Id,
+                        c.Nombre,
+                        c.Telefono,
+                        HistorialCompras = _context.Ventas
+                            .Where(v => v.IdCliente == c.Id)
+                            .OrderByDescending(v => v.FechaVenta)
+                            .Take(10) // Traemos solo las 10 compras más recientes
+                            .Select(v => new { v.Id, v.FechaVenta, v.Total })
+                            .ToList(),
+                        ServiciosActivos = _context.Suscripciones
+                            .Where(s => s.IdCliente == c.Id && s.Estado == "Activa")
+                            .Select(s => new { s.Id, s.FechaInicio, s.FechaVencimiento, s.Estado })
+                            .ToList()
+                    })
+                    .ToListAsync();
 
-            // Unificar resultados en una sola respuesta estructurada para el cliente
-            return Ok(new {
-                clientes,
-                cuentas = perfilesCuentas
-            });
+                // 2. Búsqueda de Cuentas / Perfiles
+                var perfilesCuentas = await _context.PerfilesCuentas
+                    .AsNoTracking()
+                    .Where(p => (p.Producto != null && p.Producto.Nombre.ToLower().Contains(queryLimpia)) 
+                             || p.CorreoCuenta.ToLower().Contains(queryLimpia))
+                    .Take(25)
+                    .Select(p => new
+                    {
+                        Tipo = "Cuenta/Perfil",
+                        Servicio = p.Producto != null ? p.Producto.Nombre : "Sin producto asignado",
+                        p.NombrePerfil,
+                        p.CorreoCuenta,
+                        p.Ocupado,
+                        Clave = p.PasswordCuenta,
+                        p.PIN
+                    })
+                    .ToListAsync();
+
+                return Ok(new
+                {
+                    totalResultados = clientes.Count + perfilesCuentas.Count,
+                    clientes,
+                    cuentas = perfilesCuentas
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al realizar la búsqueda universal con el término '{Query}'", query);
+                return StatusCode(500, new 
+                { 
+                    mensaje = "Error interno al procesar la búsqueda universal.",
+                    detalles = "Intente refinando el término de búsqueda." 
+                });
+            }
         }
     }
 }

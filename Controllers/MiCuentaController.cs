@@ -2,208 +2,252 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
+using NicaplusApi.DTOs;
 using System.Security.Claims;
 
 namespace NicaplusApi.Controllers
 {
     [ApiController]
-    [Route("api/micuenta")]
-    [Authorize]
+    [Route("api/[controller]")]
+    [Authorize] // Requiere token JWT activo de cliente
     public class MiCuentaController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly ILogger<MiCuentaController> _logger;
 
-        public MiCuentaController(ApplicationDbContext context)
+        public MiCuentaController(
+            ApplicationDbContext context,
+            ILogger<MiCuentaController> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
-        private int ObtenerIdCliente()
+        /// <summary>
+        /// Helper privado defensivo para extraer de forma segura el ID del cliente autenticado.
+        /// </summary>
+        private bool TryObtenerIdCliente(out int idCliente, out IActionResult? errorResult)
         {
-            var tipo = User.FindFirst("TipoUsuario")?.Value;
+            idCliente = 0;
+            errorResult = null;
 
-            if (tipo != "Cliente")
-                throw new UnauthorizedAccessException();
+            var tipoClaim = User.FindFirst("TipoUsuario")?.Value;
 
-            return int.Parse(
-                User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+            if (!string.Equals(tipoClaim, "Cliente", StringComparison.OrdinalIgnoreCase))
+            {
+                errorResult = StatusCode(403, new { mensaje = "El recurso es exclusivo para clientes registrados." });
+                return false;
+            }
+
+            var idClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(idClaim) || !int.TryParse(idClaim, out idCliente))
+            {
+                errorResult = Unauthorized(new { mensaje = "Token de autenticación inválido o desactualizado." });
+                return false;
+            }
+
+            return true;
         }
 
+        // GET: api/MiCuenta/perfil
         [HttpGet("perfil")]
         public async Task<IActionResult> Perfil()
         {
-            int idCliente = ObtenerIdCliente();
+            if (!TryObtenerIdCliente(out int idCliente, out var error)) return error!;
 
-            var cliente = await _context.Clientes
-                .AsNoTracking()
-                .FirstOrDefaultAsync(c => c.Id == idCliente);
-
-            if (cliente == null)
-                return NotFound();
-
-            return Ok(new
+            try
             {
-                cliente.Id,
-                cliente.Nombre,
-                cliente.Telefono,
-                cliente.Email,
-                cliente.FechaRegistro,
-                cliente.PuntosAcumulados,
-                cliente.Etiquetas
-            });
+                var cliente = await _context.Clientes
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.Id == idCliente);
+
+                if (cliente == null)
+                {
+                    return NotFound(new { mensaje = "No se encontró el perfil de usuario solicitado." });
+                }
+
+                var response = new PerfilClienteResponseDto
+                {
+                    Id = cliente.Id,
+                    Nombre = cliente.Nombre,
+                    Telefono = cliente.Telefono ?? string.Empty,
+                    Email = cliente.Email ?? string.Empty,
+                    FechaRegistro = cliente.FechaRegistro,
+                    PuntosAcumulados = cliente.PuntosAcumulados,
+                    Etiquetas = cliente.Etiquetas ?? string.Empty
+                };
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener el perfil del cliente con ID {Id}", idCliente);
+                return StatusCode(500, new { mensaje = "Error interno al consultar el perfil de usuario." });
+            }
         }
 
+        // GET: api/MiCuenta/mis-compras
         [HttpGet("mis-compras")]
         public async Task<IActionResult> MisCompras()
         {
-            int idCliente = ObtenerIdCliente();
+            if (!TryObtenerIdCliente(out int idCliente, out var error)) return error!;
 
-            var compras = await _context.Ventas
-                .Where(v => v.IdCliente == idCliente)
-                .Include(v => v.Detalles)
-                    .ThenInclude(d => d.Producto)
-                .OrderByDescending(v => v.FechaVenta)
-                .Select(v => new
-                {
-                    v.Id,
-                    v.FechaVenta,
-                    v.Total,
-                    v.MetodoPago,
-
-                    Productos = v.Detalles.Select(d => new
+            try
+            {
+                var compras = await _context.Ventas
+                    .AsNoTracking()
+                    .Where(v => v.IdCliente == idCliente)
+                    .OrderByDescending(v => v.FechaVenta)
+                    .Select(v => new CompraClienteResponseDto
                     {
-                        d.IdProducto,
-                        Nombre = d.Producto.Nombre,
-                        d.Cantidad,
-                        d.PrecioUnitario,
-                        d.SubTotal
+                        Id = v.Id,
+                        FechaVenta = v.FechaVenta,
+                        Total = v.Total,
+                        MetodoPago = v.MetodoPago,
+                        Productos = v.Detalles.Select(d => new DetalleCompraDto
+                        {
+                            IdProducto = d.IdProducto,
+                            NombreProducto = d.Producto != null ? d.Producto.Nombre : "Producto Genérico",
+                            Cantidad = d.Cantidad,
+                            PrecioUnitario = d.PrecioUnitario,
+                            SubTotal = d.SubTotal
+                        }).ToList()
                     })
-                })
-                .ToListAsync();
+                    .ToListAsync();
 
-            return Ok(compras);
+                return Ok(compras);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener el historial de compras del cliente con ID {Id}", idCliente);
+                return StatusCode(500, new { mensaje = "Error interno al consultar el historial de compras." });
+            }
         }
 
+        // GET: api/MiCuenta/mis-suscripciones
         [HttpGet("mis-suscripciones")]
         public async Task<IActionResult> MisSuscripciones()
         {
-            int idCliente = ObtenerIdCliente();
+            if (!TryObtenerIdCliente(out int idCliente, out var error)) return error!;
 
-            var suscripciones = await _context.Suscripciones
-                .Where(s => s.IdCliente == idCliente)
-                .Include(s => s.Producto)
-                .Include(s => s.PerfilCuenta)
-                .OrderByDescending(s => s.FechaVencimiento)
-                .Select(s => new
-                {
-                    s.Id,
-                    s.NombreServicio,
-                    s.TipoSuscripcion,
-                    s.FechaInicio,
-                    s.FechaVencimiento,
-                    s.Estado,
-                    s.CostoRenovacion,
-
-                    Producto = s.Producto == null
-                        ? null
-                        : s.Producto.Nombre,
-
-                    Perfil = s.PerfilCuenta == null
-                        ? null
-                        : new
+            try
+            {
+                var suscripciones = await _context.Suscripciones
+                    .AsNoTracking()
+                    .Where(s => s.IdCliente == idCliente)
+                    .OrderByDescending(s => s.FechaVencimiento)
+                    .Select(s => new SuscripcionClienteResponseDto
+                    {
+                        Id = s.Id,
+                        NombreServicio = s.NombreServicio,
+                        TipoSuscripcion = s.TipoSuscripcion,
+                        FechaInicio = s.FechaInicio,
+                        FechaVencimiento = s.FechaVencimiento,
+                        Estado = s.Estado,
+                        CostoRenovacion = s.CostoRenovacion,
+                        NombreProducto = s.Producto != null ? s.Producto.Nombre : null,
+                        Perfil = s.PerfilCuenta == null ? null : new PerfilCuentaAsignadaDto
                         {
-                            s.PerfilCuenta.NombrePerfil,
-                            s.PerfilCuenta.PIN,
-                            s.PerfilCuenta.CorreoCuenta,
-                            s.PerfilCuenta.PasswordCuenta
+                            NombrePerfil = s.PerfilCuenta.NombrePerfil,
+                            PIN = s.PerfilCuenta.PIN ?? string.Empty,
+                            CorreoCuenta = s.PerfilCuenta.CorreoCuenta ?? string.Empty,
+                            PasswordCuenta = s.PerfilCuenta.PasswordCuenta ?? string.Empty
                         }
-                })
-                .ToListAsync();
+                    })
+                    .ToListAsync();
 
-            return Ok(suscripciones);
+                return Ok(suscripciones);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al consultar las suscripciones del cliente con ID {Id}", idCliente);
+                return StatusCode(500, new { mensaje = "Error interno al obtener las suscripciones del usuario." });
+            }
         }
 
+        // GET: api/MiCuenta/dashboard
         [HttpGet("dashboard")]
         public async Task<IActionResult> Dashboard()
         {
-            int idCliente = ObtenerIdCliente();
+            if (!TryObtenerIdCliente(out int idCliente, out var error)) return error!;
 
-            var cliente = await _context.Clientes
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.Id == idCliente);
-
-            if (cliente == null)
-                return NotFound();
-
-            var compras = await _context.Ventas
-                .Where(v => v.IdCliente == idCliente)
-                .CountAsync();
-
-            var suscripcionesActivas = await _context.Suscripciones
-                .Where(s =>
-                    s.IdCliente == idCliente &&
-                    s.Estado == "Activa")
-                .CountAsync();
-
-            var tickets = await _context.TicketsSoporte
-                .Where(t =>
-                    t.IdCliente == idCliente &&
-                    t.Estado != "Cerrado")
-                .CountAsync();
-
-            var garantias = await _context.GarantiasTickets
-                .Where(g =>
-                    g.IdCliente == idCliente &&
-                    g.Estado != "Finalizada")
-                .CountAsync();
-
-            var proximaRenovacion = await _context.Suscripciones
-                .Where(s =>
-                    s.IdCliente == idCliente &&
-                    s.Estado == "Activa")
-                .OrderBy(s => s.FechaVencimiento)
-                .Select(s => new
-                {
-                    s.Id,
-                    s.NombreServicio,
-                    s.FechaVencimiento,
-                    s.CostoRenovacion
-                })
-                .FirstOrDefaultAsync();
-
-            var ultimasCompras = await _context.Ventas
-                .Where(v => v.IdCliente == idCliente)
-                .OrderByDescending(v => v.FechaVenta)
-                .Take(5)
-                .Select(v => new
-                {
-                    v.Id,
-                    v.FechaVenta,
-                    v.Total
-                })
-                .ToListAsync();
-
-            return Ok(new
+            try
             {
-                Cliente = new
-                {
-                    cliente.Nombre,
-                    cliente.Email,
-                    cliente.PuntosAcumulados
-                },
+                var cliente = await _context.Clientes
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Id == idCliente);
 
-                Estadisticas = new
+                if (cliente == null)
                 {
-                    Compras = compras,
+                    return NotFound(new { mensaje = "No se encontró la cuenta de cliente." });
+                }
+
+                var totalCompras = await _context.Ventas
+                    .AsNoTracking()
+                    .Where(v => v.IdCliente == idCliente)
+                    .CountAsync();
+
+                var suscripcionesActivas = await _context.Suscripciones
+                    .AsNoTracking()
+                    .Where(s => s.IdCliente == idCliente && s.Estado == "Activa")
+                    .CountAsync();
+
+                var ticketsAbiertos = await _context.TicketsSoporte
+                    .AsNoTracking()
+                    .Where(t => t.IdCliente == idCliente && t.Estado != "Cerrado")
+                    .CountAsync();
+
+                var garantiasActivas = await _context.GarantiasTickets
+                    .AsNoTracking()
+                    .Where(g => g.IdCliente == idCliente && g.Estado != "Finalizada")
+                    .CountAsync();
+
+                var proximaRenovacion = await _context.Suscripciones
+                    .AsNoTracking()
+                    .Where(s => s.IdCliente == idCliente && s.Estado == "Activa")
+                    .OrderBy(s => s.FechaVencimiento)
+                    .Select(s => new ProximaRenovacionDto
+                    {
+                        Id = s.Id,
+                        NombreServicio = s.NombreServicio,
+                        FechaVencimiento = s.FechaVencimiento,
+                        CostoRenovacion = s.CostoRenovacion
+                    })
+                    .FirstOrDefaultAsync();
+
+                var ultimasCompras = await _context.Ventas
+                    .AsNoTracking()
+                    .Where(v => v.IdCliente == idCliente)
+                    .OrderByDescending(v => v.FechaVenta)
+                    .Take(5)
+                    .Select(v => new ResumenCompraDto
+                    {
+                        Id = v.Id,
+                        FechaVenta = v.FechaVenta,
+                        Total = v.Total
+                    })
+                    .ToListAsync();
+
+                var dashboard = new DashboardClienteResponseDto
+                {
+                    NombreCliente = cliente.Nombre,
+                    EmailCliente = cliente.Email ?? string.Empty,
+                    PuntosAcumulados = cliente.PuntosAcumulados,
+                    TotalCompras = totalCompras,
                     SuscripcionesActivas = suscripcionesActivas,
-                    TicketsAbiertos = tickets,
-                    GarantiasActivas = garantias
-                },
+                    TicketsAbiertos = ticketsAbiertos,
+                    GarantiasActivas = garantiasActivas,
+                    ProximaRenovacion = proximaRenovacion,
+                    UltimasCompras = ultimasCompras
+                };
 
-                ProximaRenovacion = proximaRenovacion,
-
-                UltimasCompras = ultimasCompras
-            });
+                return Ok(dashboard);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al generar el dashboard para el cliente con ID {Id}", idCliente);
+                return StatusCode(500, new { mensaje = "Error interno al obtener los datos del panel principal." });
+            }
         }
     }
 }

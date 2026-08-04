@@ -1,184 +1,329 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
+using NicaplusApi.DTOs;
 using NicaplusApi.Models;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace NicaplusApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize] // Exclusivo para gestión administrativa
     public class ProveedoresController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
-        
-        // Zona horaria estándar para Nicaragua
-        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+        private readonly ILogger<ProveedoresController> _logger;
 
-        public ProveedoresController(ApplicationDbContext context)
+        public ProveedoresController(
+            ApplicationDbContext context,
+            ILogger<ProveedoresController> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
         private DateTime GetNicaraguaTime()
         {
-            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
+            TimeZoneInfo zone;
+            try
+            {
+                zone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                zone = TimeZoneInfo.FindSystemTimeZoneById("America/Managua");
+            }
+
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
         }
 
-        // GET: api/Proveedores
+        // 1. GET: api/Proveedores
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Proveedor>>> Get()
+        public async Task<IActionResult> Get()
         {
-            return Ok(await _context.Proveedores.OrderBy(p => p.RazonSocial).ToListAsync());
+            try
+            {
+                var proveedores = await _context.Proveedores
+                    .AsNoTracking()
+                    .OrderBy(p => p.RazonSocial)
+                    .ToListAsync();
+
+                return Ok(proveedores);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener la lista de proveedores.");
+                return StatusCode(500, new { mensaje = "Error interno al recuperar los proveedores." });
+            }
         }
 
-        // GET: api/Proveedores/analisis-rendimiento (Métricas CRM optimizadas en Base de Datos)
+        // 2. GET: api/Proveedores/analisis-rendimiento
         [HttpGet("analisis-rendimiento")]
         public async Task<IActionResult> GetAnalisisRendimiento()
         {
-            // CORREGIDO: La proyección Select mapea y calcula directo en SQL, no en memoria RAM.
-            var reporte = await _context.Proveedores
-                .Select(p => new
-                {
-                    p.Id,
-                    p.RazonSocial,
-                    p.Telefono,
-                    TotalOrdenes = _context.ComprasProveedores.Count(c => c.IdProveedor == p.Id),
-                    TotalInvertido = _context.ComprasProveedores.Where(c => c.IdProveedor == p.Id).Sum(c => c.TotalCompra),
-                    
-                    TiempoRespuestaPromedio = _context.ComprasProveedores.Where(c => c.IdProveedor == p.Id).Any()
-                        ? _context.ComprasProveedores.Where(c => c.IdProveedor == p.Id).Average(c => c.TiempoEntregaRealDias)
-                        : 0,
-
-                    MargenGananciaHistorico = _context.ComprasProveedores
-                        .Where(c => c.IdProveedor == p.Id)
-                        .SelectMany(c => c.Detalles)
-                        .Sum(d => d.Producto != null ? (d.Producto.PrecioVenta - d.CostoUnitario) * d.Cantidad : 0)
-                })
-                .ToListAsync();
-
-            // Evaluamos el Score de Confiabilidad y redondeos en memoria sobre el resultado final optimizado
-            var resultadoFinal = reporte.Select(r =>
+            try
             {
-                double scoreConfiabilidad = 100;
-                if (r.TiempoRespuestaPromedio > 5) scoreConfiabilidad -= 20;
-                if (r.TiempoRespuestaPromedio > 10) scoreConfiabilidad -= 30;
-                if (r.TotalOrdenes == 0) scoreConfiabilidad = 0;
+                // 1. Obtenemos las compras y sus detalles agregados agrupados por proveedor
+                var comprasPorProveedor = await _context.ComprasProveedores
+                    .AsNoTracking()
+                    .GroupBy(c => c.IdProveedor)
+                    .Select(g => new
+                    {
+                        IdProveedor = g.Key,
+                        TotalOrdenes = g.Count(),
+                        TotalInvertido = g.Sum(c => c.TotalCompra),
+                        TiempoRespuestaPromedio = g.Average(c => (double?)c.TiempoEntregaRealDias) ?? 0.0,
+                        MargenGananciaHistorico = g.SelectMany(c => c.Detalles)
+                            .Sum(d => d.Producto != null ? (d.Producto.PrecioVenta - d.CostoUnitario) * d.Cantidad : 0m)
+                    })
+                    .ToListAsync();
 
-                return new
+                // 2. Obtenemos la lista general de proveedores
+                var proveedores = await _context.Proveedores
+                    .AsNoTracking()
+                    .Select(p => new { p.Id, p.RazonSocial, p.Telefono })
+                    .ToListAsync();
+
+                // 3. Cruzamos y calculamos el Score de Confiabilidad en memoria
+                var resultadoFinal = proveedores.Select(p =>
                 {
-                    r.Id,
-                    r.RazonSocial,
-                    r.Telefono,
-                    r.TotalOrdenes,
-                    r.TotalInvertido,
-                    r.MargenGananciaHistorico,
-                    TiempoRespuestaPromedio = Math.Round(r.TiempoRespuestaPromedio, 1),
-                    ScoreConfiabilidad = scoreConfiabilidad
-                };
-            }).OrderByDescending(r => r.MargenGananciaHistorico).ToList();
+                    var stats = comprasPorProveedor.FirstOrDefault(c => c.IdProveedor == p.Id);
 
-            return Ok(resultadoFinal);
+                    int totalOrdenes = stats?.TotalOrdenes ?? 0;
+                    decimal totalInvertido = stats?.TotalInvertido ?? 0m;
+                    double tiempoPromedio = stats != null ? Math.Round(stats.TiempoRespuestaPromedio, 1) : 0.0;
+                    decimal margenHistorico = stats?.MargenGananciaHistorico ?? 0m;
+
+                    double score = 100.0;
+                    if (tiempoPromedio > 5) score -= 20;
+                    if (tiempoPromedio > 10) score -= 30;
+                    if (totalOrdenes == 0) score = 0;
+
+                    return new RendimientoProveedorResponseDto
+                    {
+                        Id = p.Id,
+                        RazonSocial = p.RazonSocial,
+                        Telefono = p.Telefono,
+                        TotalOrdenes = totalOrdenes,
+                        TotalInvertido = totalInvertido,
+                        MargenGananciaHistorico = margenHistorico,
+                        TiempoRespuestaPromedio = tiempoPromedio,
+                        ScoreConfiabilidad = Math.Max(0, score)
+                    };
+                })
+                .OrderByDescending(r => r.MargenGananciaHistorico)
+                .ToList();
+
+                return Ok(resultadoFinal);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al calcular el análisis de rendimiento de proveedores.");
+                return StatusCode(500, new { mensaje = "Error interno al generar el informe CRM de proveedores." });
+            }
         }
 
-        // POST: api/Proveedores (Crear Proveedor)
+        // 3. POST: api/Proveedores
         [HttpPost]
-        public async Task<ActionResult<Proveedor>> Post([FromBody] Proveedor proveedor)
+        public async Task<IActionResult> Post([FromBody] CrearProveedorDto dto)
         {
-            _context.Proveedores.Add(proveedor);
-            await _context.SaveChangesAsync();
-            return Ok(proveedor);
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new { mensaje = "Datos del proveedor incompletos o incorrectos.", detalles = ModelState });
+            }
+
+            try
+            {
+                var proveedor = new Proveedor
+                {
+                    RazonSocial = dto.RazonSocial.Trim(),
+                    Ruc = dto.Ruc?.Trim() ?? string.Empty,
+                    Telefono = dto.Telefono?.Trim() ?? string.Empty,
+                    Email = dto.Email?.Trim() ?? string.Empty
+                };
+
+                _context.Proveedores.Add(proveedor);
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    mensaje = "Proveedor registrado exitosamente.",
+                    proveedor
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al registrar el proveedor {RazonSocial}", dto.RazonSocial);
+                return StatusCode(500, new { mensaje = "Error interno al guardar el proveedor." });
+            }
         }
 
+        // 4. PUT: api/Proveedores/5
         [HttpPut("{id}")]
-        public async Task<IActionResult> Put(int id, [FromBody] Proveedor proveedor)
+        public async Task<IActionResult> Put(int id, [FromBody] ActualizarProveedorDto dto)
         {
-            if (id != proveedor.Id)
-                return BadRequest();
+            if (id != dto.Id)
+            {
+                return BadRequest(new { mensaje = "El ID en la URL no coincide con el cuerpo del modelo." });
+            }
 
-            _context.Entry(proveedor).State = EntityState.Modified;
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new { mensaje = "Datos de actualización inválidos.", detalles = ModelState });
+            }
 
-            try { await _context.SaveChangesAsync(); }
-            catch { return NotFound(); }
+            try
+            {
+                var proveedorExistente = await _context.Proveedores.FindAsync(id);
+                if (proveedorExistente == null)
+                {
+                    return NotFound(new { mensaje = "El proveedor solicitado no existe." });
+                }
 
-            return NoContent();
+                proveedorExistente.RazonSocial = dto.RazonSocial.Trim();
+                proveedorExistente.Ruc = dto.Ruc?.Trim() ?? string.Empty;
+                proveedorExistente.Telefono = dto.Telefono?.Trim() ?? string.Empty;
+                proveedorExistente.Email = dto.Email?.Trim() ?? string.Empty;
+
+                await _context.SaveChangesAsync();
+
+                return Ok(new { mensaje = "Información del proveedor actualizada correctamente.", proveedorId = id });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al actualizar el proveedor ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al actualizar los datos del proveedor." });
+            }
         }
 
+        // 5. DELETE: api/Proveedores/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
-            var proveedor = await _context.Proveedores.FindAsync(id);
-            if (proveedor == null) return NotFound();
-
-            var comprasAsociadas = await _context.ComprasProveedores
-                .Where(c => c.IdProveedor == id)
-                .Select(c => new { c.Id, Fecha = c.FechaCompra, Total = c.TotalCompra })
-                .ToListAsync();
-
-            if (comprasAsociadas.Any())
+            try
             {
-                return BadRequest(new
+                var proveedor = await _context.Proveedores.FindAsync(id);
+                if (proveedor == null)
                 {
-                    error = "Restricción de integridad",
-                    mensaje = "No puede eliminarse el proveedor porque tiene compras registradas en el sistema.",
-                    compras = comprasAsociadas
-                });
-            }
+                    return NotFound(new { mensaje = "El proveedor solicitado no existe." });
+                }
 
-            _context.Proveedores.Remove(proveedor);
-            await _context.SaveChangesAsync();
-            return NoContent();
+                var comprasAsociadas = await _context.ComprasProveedores
+                    .AsNoTracking()
+                    .Where(c => c.IdProveedor == id)
+                    .Select(c => new { c.Id, Fecha = c.FechaCompra, Total = c.TotalCompra })
+                    .ToListAsync();
+
+                if (comprasAsociadas.Count > 0)
+                {
+                    return BadRequest(new
+                    {
+                        error = "Restricción de integridad referencial",
+                        mensaje = "No es posible eliminar el proveedor debido a que posee compras registradas.",
+                        totalCompras = comprasAsociadas.Count,
+                        compras = comprasAsociadas
+                    });
+                }
+
+                _context.Proveedores.Remove(proveedor);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { mensaje = "Proveedor eliminado correctamente." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al eliminar el proveedor ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al eliminar el proveedor." });
+            }
         }
 
-        // POST: api/Proveedores/compras
+        // 6. POST: api/Proveedores/compras
         [HttpPost("compras")]
-        public async Task<IActionResult> RegistrarCompra([FromBody] CompraProveedor compra)
+        public async Task<IActionResult> RegistrarCompra([FromBody] RegistrarCompraProveedorDto dto)
         {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new { mensaje = "Los datos de la compra son inválidos.", detalles = ModelState });
+            }
+
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                var ahoraNicaragua = GetNicaraguaTime();
-
-                // CORREGIDO: Seteamos la hora exacta de Nicaragua para la compra física
-                compra.FechaCompra = ahoraNicaragua;
-                _context.ComprasProveedores.Add(compra);
-
-                foreach (var detalle in compra.Detalles)
+                var proveedor = await _context.Proveedores.FindAsync(dto.IdProveedor);
+                if (proveedor == null)
                 {
-                    var producto = await _context.Productos.FindAsync(detalle.IdProducto);
-                    if (producto != null)
-                    {
-                        producto.StockActual += detalle.Cantidad;
-                        producto.PrecioCosto = detalle.CostoUnitario;
-                        producto.GarantiaDias = detalle.GarantiaDiasPactada;
-                        producto.Proveedor = (await _context.Proveedores.FindAsync(compra.IdProveedor))?.RazonSocial ?? producto.Proveedor;
-                    }
+                    return BadRequest(new { mensaje = "El proveedor especificado no existe." });
                 }
 
-                // CORREGIDO: El egreso contable se amarra a la misma línea temporal de Nicaragua
+                var ahoraNicaragua = GetNicaraguaTime();
+
+                var nuevaCompra = new CompraProveedor
+                {
+                    IdProveedor = dto.IdProveedor,
+                    FechaCompra = ahoraNicaragua,
+                    TotalCompra = dto.TotalCompra,
+                    Detalles = new List<DetalleCompraProveedor>()
+                };
+
+                _context.ComprasProveedores.Add(nuevaCompra);
+
+                foreach (var item in dto.Detalles)
+                {
+                    var producto = await _context.Productos.FindAsync(item.IdProducto);
+                    if (producto == null)
+                    {
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { mensaje = $"El producto con ID {item.IdProducto} no existe." });
+                    }
+
+                    // Aumento de inventario físico y actualización de costos
+                    if (producto.ControlaStock && !producto.EsDigital)
+                    {
+                        producto.StockActual += item.Cantidad;
+                    }
+
+                    producto.PrecioCosto = item.CostoUnitario;
+                    producto.GarantiaDias = item.GarantiaDiasPactada;
+                    producto.Proveedor = proveedor.RazonSocial;
+
+                    nuevaCompra.Detalles.Add(new DetalleCompraProveedor
+                    {
+                        IdProducto = item.IdProducto,
+                        Cantidad = item.Cantidad,
+                        CostoUnitario = item.CostoUnitario,
+                        GarantiaDiasPactada = item.GarantiaDiasPactada
+                    });
+                }
+
+                // Generación automática del egreso contable en caja
                 var egresoCaja = new MovimientoCaja
                 {
                     Fecha = ahoraNicaragua,
                     Tipo = "Egreso",
                     Concepto = "Compra Proveedor",
-                    Monto = compra.TotalCompra,
-                    Detalle = $"Adquisición de lote a Proveedor ID: {compra.IdProveedor}",
-                    CompraProveedor = compra 
+                    Monto = dto.TotalCompra,
+                    Detalle = $"Adquisición de mercancía/lote a proveedor: {proveedor.RazonSocial} (ID: {proveedor.Id})",
+                    CompraProveedor = nuevaCompra
                 };
+
                 _context.MovimientosCaja.Add(egresoCaja);
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
-                return Ok(compra);
+
+                return Ok(new
+                {
+                    mensaje = "Compra registrada y procesada correctamente en inventario y caja.",
+                    compraId = nuevaCompra.Id,
+                    total = nuevaCompra.TotalCompra
+                });
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                var errorDetalle = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
-                return StatusCode(500, $"Error en transaccion de inventario: {errorDetalle}");
+                _logger.LogError(ex, "Error crítico durante la transacción de compra a proveedor.");
+                return StatusCode(500, new { mensaje = "Error interno al procesar la compra e ingresar el stock." });
             }
         }
     }

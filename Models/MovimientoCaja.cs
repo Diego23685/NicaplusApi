@@ -14,27 +14,30 @@ namespace NicaplusApi.Models
 
         [Required]
         [StringLength(50)]
-        public string Tipo { get; set; } = string.Empty; // 🛠️ Solucionado: Inicializado con texto vacío
+        public string Tipo { get; set; } = string.Empty;
 
         [Required]
         [StringLength(50)]
-        public string Concepto { get; set; } = string.Empty; // 🛠️ Solucionado: Inicializado con texto vacío
+        public string Concepto { get; set; } = string.Empty;
 
         [Required]
         [Column(TypeName = "decimal(18,2)")]
         public decimal Monto { get; set; }
 
         [StringLength(255)]
-        public string Detalle { get; set; } = string.Empty; // Este ya estaba bien configurado
+        public string Detalle { get; set; } = string.Empty;
 
         public int? IdVenta { get; set; }
         public int? IdCompraProveedor { get; set; }
+        public int? IdRenovacion { get; set; }
 
         [ForeignKey("IdVenta")]
-        public Venta? Venta { get; set; } // Las propiedades con "?" sí permiten nulos por diseño, por eso no daban warning
+        public Venta? Venta { get; set; }
 
         [ForeignKey("IdCompraProveedor")]
         public CompraProveedor? CompraProveedor { get; set; }
-        public int? IdRenovacion { get; set; }
+
+        [ForeignKey("IdRenovacion")]
+        public Renovacion? Renovacion { get; set; } // ◄ AGREGADO: Propiedad de navegación faltante
     }
 }

@@ -1,90 +1,182 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
+using NicaplusApi.DTOs;
 using NicaplusApi.Models;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace NicaplusApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize] // Protegemos la gestión de tickets y reclamos de clientes
     public class GarantiasTicketsController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly ILogger<GarantiasTicketsController> _logger;
 
-        // Zona horaria estándar para Nicaragua
-        private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
-
-        public GarantiasTicketsController(ApplicationDbContext context)
+        public GarantiasTicketsController(
+            ApplicationDbContext context,
+            ILogger<GarantiasTicketsController> logger)
         {
             _context = context;
+            _logger = logger;
+        }
+
+        private static TimeZoneInfo GetNicaraguaTimeZone()
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById("America/Managua");
+            }
         }
 
         private DateTime GetNicaraguaTime()
         {
-            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, GetNicaraguaTimeZone());
         }
 
         // GET: api/GarantiasTickets
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<object>>> Get()
+        public async Task<IActionResult> Get()
         {
-            return Ok(await _context.GarantiasTickets
-                .Include(g => g.Cliente)
-                .Include(g => g.Responsable)
-                .OrderByDescending(g => g.FechaRepo)
-                .Select(g => new {
-                    g.Id,
-                    g.IdCliente,
-                    g.IdUsuarioResponsable,
-                    g.Motivo,
-                    g.FechaRepo,
-                    g.CuentaAnterior,
-                    g.CuentaNueva,
-                    g.CostoReposicion,
-                    ClienteNombre = g.Cliente != null ? g.Cliente.Nombre : "Genérico",
-                    ResponsableNombre = g.Responsable != null ? g.Responsable.Nombre : "Admin"
-                })
-                .ToListAsync());
+            try
+            {
+                var tickets = await _context.GarantiasTickets
+                    .AsNoTracking()
+                    .Include(g => g.Cliente)
+                    .Include(g => g.Responsable)
+                    .OrderByDescending(g => g.FechaRepo)
+                    .Select(g => new GarantiaTicketResponseDto
+                    {
+                        Id = g.Id,
+                        IdCliente = g.IdCliente,
+                        ClienteNombre = g.Cliente != null ? g.Cliente.Nombre : "Cliente Genérico",
+                        ClienteTelefono = g.Cliente != null ? g.Cliente.Telefono : string.Empty,
+                        IdUsuarioResponsable = g.IdUsuarioResponsable,
+                        ResponsableNombre = g.Responsable != null ? g.Responsable.Nombre : "Sistema / Admin",
+                        IdProducto = g.IdProducto,
+                        Motivo = g.Motivo,
+                        CuentaAnterior = g.CuentaAnterior,
+                        CuentaNueva = g.CuentaNueva,
+                        CostoReposicion = g.CostoReposicion,
+                        FechaRepo = g.FechaRepo,
+                        Estado = g.Estado
+                    })
+                    .ToListAsync();
+
+                return Ok(tickets);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener el listado de tickets de garantía.");
+                return StatusCode(500, new { mensaje = "Error interno al consultar los tickets de garantía." });
+            }
+        }
+
+        // GET: api/GarantiasTickets/5
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            try
+            {
+                var ticket = await _context.GarantiasTickets
+                    .AsNoTracking()
+                    .Include(g => g.Cliente)
+                    .Include(g => g.Responsable)
+                    .FirstOrDefaultAsync(g => g.Id == id);
+
+                if (ticket == null)
+                {
+                    return NotFound(new { mensaje = "El ticket de garantía no fue encontrado." });
+                }
+
+                var response = new GarantiaTicketResponseDto
+                {
+                    Id = ticket.Id,
+                    IdCliente = ticket.IdCliente,
+                    ClienteNombre = ticket.Cliente != null ? ticket.Cliente.Nombre : "Cliente Genérico",
+                    ClienteTelefono = ticket.Cliente != null ? ticket.Cliente.Telefono : string.Empty,
+                    IdUsuarioResponsable = ticket.IdUsuarioResponsable,
+                    ResponsableNombre = ticket.Responsable != null ? ticket.Responsable.Nombre : "Sistema / Admin",
+                    IdProducto = ticket.IdProducto,
+                    Motivo = ticket.Motivo,
+                    CuentaAnterior = ticket.CuentaAnterior,
+                    CuentaNueva = ticket.CuentaNueva,
+                    CostoReposicion = ticket.CostoReposicion,
+                    FechaRepo = ticket.FechaRepo,
+                    Estado = ticket.Estado
+                };
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener el ticket de garantía con ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al consultar el ticket." });
+            }
         }
 
         // POST: api/GarantiasTickets
         [HttpPost]
-        public async Task<ActionResult<GarantiaTicket>> Post([FromBody] GarantiaTicket garantia)
+        public async Task<IActionResult> Post([FromBody] CrearGarantiaTicketDto dto)
         {
-            var ahoraNicaragua = GetNicaraguaTime();
-
-            // Corregido: Forzar fecha local de Nicaragua
-            if (garantia.FechaRepo == default)
+            if (!ModelState.IsValid)
             {
-                garantia.FechaRepo = ahoraNicaragua;
+                return BadRequest(new { mensaje = "Datos del ticket incompletos o inválidos.", detalles = ModelState });
             }
 
-            // Transacción para asegurar consistencia con caja si hay pérdidas por reposición
+            var ahoraNicaragua = GetNicaraguaTime();
+            DateTime fechaFinal = dto.FechaRepo.HasValue && dto.FechaRepo.Value != default
+                ? dto.FechaRepo.Value
+                : ahoraNicaragua;
+
             using var transaction = await _context.Database.BeginTransactionAsync();
 
             try
             {
+                var cliente = await _context.Clientes.FindAsync(dto.IdCliente);
+                if (cliente == null)
+                {
+                    return BadRequest(new { mensaje = "El cliente especificado no existe." });
+                }
+
+                var responsable = await _context.Usuarios.FindAsync(dto.IdUsuarioResponsable);
+                if (responsable == null)
+                {
+                    return BadRequest(new { mensaje = "El usuario responsable especificado no existe." });
+                }
+
+                var garantia = new GarantiaTicket
+                {
+                    IdCliente = dto.IdCliente,
+                    IdUsuarioResponsable = dto.IdUsuarioResponsable,
+                    IdProducto = dto.IdProducto,
+                    Motivo = dto.Motivo.Trim(),
+                    CuentaAnterior = dto.CuentaAnterior.Trim(),
+                    CuentaNueva = dto.CuentaNueva.Trim(),
+                    CostoReposicion = dto.CostoReposicion,
+                    FechaRepo = fechaFinal,
+                    Estado = string.IsNullOrWhiteSpace(dto.Estado) ? "Pendiente" : dto.Estado.Trim()
+                };
+
                 _context.GarantiasTickets.Add(garantia);
                 await _context.SaveChangesAsync();
 
-                // Si la garantía te costó dinero (p.ej. tuviste que comprar otra pantalla/perfil para cumplir), se cae la caja
+                // Si la reposición implicó un costo para el negocio, se registra la pérdida/egreso directo en Caja
                 if (garantia.CostoReposicion > 0)
                 {
-                    // Intentamos cargar el nombre del cliente para dejar un rastro claro en caja
-                    var cliente = await _context.Clientes.FindAsync(garantia.IdCliente);
-                    var clienteNombre = cliente?.Nombre ?? "Genérico";
-
                     var movimientoCaja = new MovimientoCaja
                     {
                         Fecha = ahoraNicaragua,
                         Tipo = "Egreso",
                         Monto = garantia.CostoReposicion,
-                        Concepto = "Gasto Ordinario", // Afecta directamente tu cálculo de utilidad diaria en CajaController
-                        Detalle = $"Pérdida por Garantía Ticket ID: {garantia.Id} | Cliente: {clienteNombre} | Motivo: {garantia.Motivo}"
+                        Concepto = "Gasto Ordinario", // Se descuenta en las métricas de utilidad operativa
+                        Detalle = $"Pérdida por Garantía Ticket ID: {garantia.Id} | Cliente: {cliente.Nombre} | Motivo: {garantia.Motivo}"
                     };
 
                     _context.MovimientosCaja.Add(movimientoCaja);
@@ -92,12 +184,35 @@ namespace NicaplusApi.Controllers
                 }
 
                 await transaction.CommitAsync();
-                return Ok(garantia);
+
+                var response = new GarantiaTicketResponseDto
+                {
+                    Id = garantia.Id,
+                    IdCliente = garantia.IdCliente,
+                    ClienteNombre = cliente.Nombre,
+                    ClienteTelefono = cliente.Telefono,
+                    IdUsuarioResponsable = garantia.IdUsuarioResponsable,
+                    ResponsableNombre = responsable.Nombre,
+                    IdProducto = garantia.IdProducto,
+                    Motivo = garantia.Motivo,
+                    CuentaAnterior = garantia.CuentaAnterior,
+                    CuentaNueva = garantia.CuentaNueva,
+                    CostoReposicion = garantia.CostoReposicion,
+                    FechaRepo = garantia.FechaRepo,
+                    Estado = garantia.Estado
+                };
+
+                return CreatedAtAction(nameof(GetById), new { id = garantia.Id }, new
+                {
+                    mensaje = "Ticket de garantía procesado y registrado correctamente.",
+                    ticket = response
+                });
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, $"Error interno al procesar el ticket de garantía: {ex.Message}");
+                _logger.LogError(ex, "Error al procesar el ticket de garantía.");
+                return StatusCode(500, new { mensaje = "Error interno al procesar el ticket de garantía." });
             }
         }
     }

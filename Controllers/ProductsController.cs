@@ -1,6 +1,8 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NicaplusApi.Data;
+using NicaplusApi.DTOs;
 using NicaplusApi.Models;
 
 namespace NicaplusApi.Controllers
@@ -10,143 +12,296 @@ namespace NicaplusApi.Controllers
     public class ProductsController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly ILogger<ProductsController> _logger;
 
-        public ProductsController(ApplicationDbContext context)
+        public ProductsController(
+            ApplicationDbContext context,
+            ILogger<ProductsController> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
-        // 1. Obtener todos los productos (Para el panel de administración)
+        // 1. GET: api/Products (Panel de Administración)
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Producto>>> GetProductos()
+        [Authorize]
+        public async Task<IActionResult> GetProductos()
         {
-            return await _context.Productos.ToListAsync();
+            try
+            {
+                var productos = await _context.Productos
+                    .AsNoTracking()
+                    .Include(p => p.Categoria)
+                    .Include(p => p.Juego)
+                    .OrderByDescending(p => p.Id)
+                    .Select(p => new ProductoAdminResponseDto
+                    {
+                        Id = p.Id,
+                        Nombre = p.Nombre,
+                        Descripcion = p.Descripcion,
+                        PrecioVenta = p.PrecioVenta,
+                        PrecioCosto = p.PrecioCosto,
+                        StockActual = p.StockActual,
+                        StockMinimo = p.StockMinimo,
+                        ImagenUrl = p.ImagenUrl,
+                        EsDigital = p.EsDigital,
+                        ControlaStock = p.ControlaStock,
+                        RequiereServicio = p.RequiereServicio,
+                        VisibleEnCatalogo = p.VisibleEnCatalogo,
+                        EsSuscripcion = p.EsSuscripcion,
+                        DiasDuracion = p.DiasDuracion,
+                        GarantiaDias = p.GarantiaDias,
+                        Proveedor = p.Proveedor,
+                        Estado = p.Estado,
+                        CategoriaId = p.CategoriaId,
+                        CategoriaNombre = p.Categoria != null ? p.Categoria.Nombre : null,
+                        JuegoId = p.JuegoId,
+                        JuegoNombre = p.Juego != null ? p.Juego.Nombre : null
+                    })
+                    .ToListAsync();
+
+                return Ok(productos);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al consultar la lista general de productos.");
+                return StatusCode(500, new { mensaje = "Error interno al obtener los productos." });
+            }
         }
 
-        // 2. Obtener catálogo público (Para la tienda online / POS)
+        // 2. GET: api/Products/catalogo (Público para Tienda / POS)
         [HttpGet("catalogo")]
-        public async Task<ActionResult<IEnumerable<object>>> GetCatalogoPublico()
+        [AllowAnonymous]
+        public async Task<IActionResult> GetCatalogoPublico()
         {
-            var productos = await _context.Productos
-                .Where(p => p.VisibleEnCatalogo && p.Estado == "Activo")
-                .ToListAsync();
-
-            var listaDinamica = new List<object>();
-
-            foreach (var p in productos)
+            try
             {
-                int stockReal = p.StockActual;
+                // Agrupación previa en memoria de perfiles disponibles por IdProducto para resolver N+1
+                var stockPerfilesPool = await _context.PerfilesCuentas
+                    .AsNoTracking()
+                    .Where(pc => !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                    .GroupBy(pc => pc.IdProducto)
+                    .Select(g => new { IdProducto = g.Key, TotalDisponibles = g.Count() })
+                    .ToDictionaryAsync(x => x.IdProducto, x => x.TotalDisponibles);
 
-                if (p.EsSuscripcion)
-                {
-                    // 🌟 Sincronizado estrictamente con los estados del pipeline de ventas
-                    stockReal = await _context.PerfilesCuentas
-                        .CountAsync(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible");
-                }
+                var productos = await _context.Productos
+                    .AsNoTracking()
+                    .Include(p => p.Categoria)
+                    .Include(p => p.Juego)
+                    .Where(p => p.VisibleEnCatalogo && p.Estado == "Activo")
+                    .OrderBy(p => p.Nombre)
+                    .ToListAsync();
 
-                listaDinamica.Add(new
+                var catalogo = productos.Select(p => new ProductoCatalogoResponseDto
                 {
-                    p.Id,
-                    p.Nombre,
-                    p.Descripcion,
-                    p.PrecioVenta,
-                    p.ImagenUrl,
-                    p.EsDigital,
-                    p.EsSuscripcion,
-                    p.DiasDuracion,
-                    StockActual = stockReal, 
-                    p.VisibleEnCatalogo
-                });
+                    Id = p.Id,
+                    Nombre = p.Nombre,
+                    Descripcion = p.Descripcion,
+                    PrecioVenta = p.PrecioVenta,
+                    ImagenUrl = p.ImagenUrl,
+                    EsDigital = p.EsDigital,
+                    EsSuscripcion = p.EsSuscripcion,
+                    DiasDuracion = p.DiasDuracion,
+                    VisibleEnCatalogo = p.VisibleEnCatalogo,
+                    CategoriaNombre = p.Categoria?.Nombre,
+                    JuegoNombre = p.Juego?.Nombre,
+                    StockActual = p.EsSuscripcion
+                        ? (stockPerfilesPool.TryGetValue(p.Id, out int stockCalculado) ? stockCalculado : 0)
+                        : p.StockActual
+                }).ToList();
+
+                return Ok(catalogo);
             }
-
-            return Ok(listaDinamica);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al generar el catálogo público de productos.");
+                return StatusCode(500, new { mensaje = "Error interno al recuperar el catálogo." });
+            }
         }
 
-        // 3. Obtener alertas de Stock Bajo (Solo aplica a productos que sí controlan inventario)
+        // 3. GET: api/Products/alertas-stock
         [HttpGet("alertas-stock")]
-        public async Task<ActionResult<IEnumerable<Producto>>> GetAlertasStock()
+        [Authorize]
+        public async Task<IActionResult> GetAlertasStock()
         {
-            return await _context.Productos
-                .Where(p => p.ControlaStock && !p.EsDigital && !p.RequiereServicio && p.StockActual <= p.StockMinimo)
-                .ToListAsync();
+            try
+            {
+                var alertas = await _context.Productos
+                    .AsNoTracking()
+                    .Where(p => p.ControlaStock && !p.EsDigital && !p.RequiereServicio && p.StockActual <= p.StockMinimo)
+                    .OrderBy(p => p.StockActual)
+                    .Select(p => new ProductoAdminResponseDto
+                    {
+                        Id = p.Id,
+                        Nombre = p.Nombre,
+                        StockActual = p.StockActual,
+                        StockMinimo = p.StockMinimo,
+                        PrecioVenta = p.PrecioVenta,
+                        Estado = p.Estado
+                    })
+                    .ToListAsync();
+
+                return Ok(alertas);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al consultar alertas de inventario crítico.");
+                return StatusCode(500, new { mensaje = "Error interno al obtener las alertas de stock." });
+            }
         }
 
-        // 4. Crear un producto nuevo (Físico, Digital o Servicio)
+        // 4. POST: api/Products
         [HttpPost]
-        public async Task<ActionResult<Producto>> CreateProducto([FromBody] Producto producto)
+        [Authorize]
+        public async Task<IActionResult> CreateProducto([FromBody] CrearProductoDto dto)
         {
-            if (producto.EsDigital || producto.RequiereServicio || !producto.ControlaStock)
+            if (!ModelState.IsValid)
             {
-                producto.StockMinimo = 0; 
-                
-                if (!producto.ControlaStock)
-                {
-                    producto.StockActual = 0; // Forzamos limpieza si no controla inventario numérico
-                }
+                return BadRequest(new { mensaje = "Datos del producto incompletos o incorrectos.", detalles = ModelState });
             }
-
-            _context.Productos.Add(producto);
-            await _context.SaveChangesAsync();
-
-            return CreatedAtAction(nameof(GetProductos), new { id = producto.Id }, producto);
-        }
-
-        // 5. Actualizar producto existente
-        [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateProducto(int id, [FromBody] Producto producto)
-        {
-            if (id != producto.Id)
-            {
-                return BadRequest("El ID del producto no coincide.");
-            }
-
-            if (!producto.ControlaStock)
-            {
-                producto.StockMinimo = 0;
-                producto.StockActual = 0;
-            }
-
-            _context.Entry(producto).State = EntityState.Modified;
 
             try
             {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!await _context.Productos.AnyAsync(p => p.Id == id))
+                var producto = new Producto
                 {
-                    return NotFound("Producto no encontrado.");
-                }
-                throw;
-            }
+                    Nombre = dto.Nombre.Trim(),
+                    Descripcion = dto.Descripcion?.Trim() ?? string.Empty,
+                    PrecioVenta = dto.PrecioVenta,
+                    PrecioCosto = dto.PrecioCosto,
+                    StockActual = (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock) ? 0 : dto.StockActual,
+                    StockMinimo = (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock) ? 0 : dto.StockMinimo,
+                    ImagenUrl = dto.ImagenUrl?.Trim() ?? string.Empty,
+                    EsDigital = dto.EsDigital,
+                    ControlaStock = dto.ControlaStock,
+                    RequiereServicio = dto.RequiereServicio,
+                    VisibleEnCatalogo = dto.VisibleEnCatalogo,
+                    EsSuscripcion = dto.EsSuscripcion,
+                    DiasDuracion = dto.DiasDuracion,
+                    GarantiaDias = dto.GarantiaDias,
+                    Proveedor = dto.Proveedor?.Trim() ?? string.Empty,
+                    Estado = string.IsNullOrWhiteSpace(dto.Estado) ? "Activo" : dto.Estado.Trim(),
+                    CategoriaId = dto.CategoriaId,
+                    JuegoId = dto.JuegoId
+                };
 
-            return NoContent();
+                _context.Productos.Add(producto);
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    mensaje = "Producto registrado con éxito.",
+                    productoId = producto.Id
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al crear producto {Nombre}", dto.Nombre);
+                return StatusCode(500, new { mensaje = "Error interno al registrar el nuevo producto." });
+            }
         }
 
-        // 6. Eliminar producto
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteProducto(int id)
+        // 5. PUT: api/Products/5
+        [HttpPut("{id}")]
+        [Authorize]
+        public async Task<IActionResult> UpdateProducto(int id, [FromBody] ActualizarProductoDto dto)
         {
-            var producto = await _context.Productos.FindAsync(id);
-            if (producto == null) return NotFound();
-
-            var tieneVentas = await _context.DetallesVentas.AnyAsync(d => d.IdProducto == id);
-            var tieneSuscripciones = await _context.Suscripciones.AnyAsync(s => s.IdProducto == id);
-
-            if (tieneVentas || tieneSuscripciones)
+            if (id != dto.Id)
             {
-                producto.VisibleEnCatalogo = false;
-                producto.Estado = "Pausado";
-                _context.Productos.Update(producto);
-                await _context.SaveChangesAsync();
-                return Ok(new { mensaje = "El producto tiene historial comercial. Se ha ocultado del catálogo y desactivado para nuevas ventas." });
+                return BadRequest(new { mensaje = "El ID enviado en la ruta no coincide con el cuerpo del modelo." });
             }
 
-            _context.Productos.Remove(producto);
-            await _context.SaveChangesAsync();
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new { mensaje = "Datos de actualización inválidos.", detalles = ModelState });
+            }
 
-            return NoContent();
+            try
+            {
+                var productoExistente = await _context.Productos.FindAsync(id);
+                if (productoExistente == null)
+                {
+                    return NotFound(new { mensaje = "El producto que intenta actualizar no existe." });
+                }
+
+                // Actualización explicita de propiedades
+                productoExistente.Nombre = dto.Nombre.Trim();
+                productoExistente.Descripcion = dto.Descripcion?.Trim() ?? string.Empty;
+                productoExistente.PrecioVenta = dto.PrecioVenta;
+                productoExistente.PrecioCosto = dto.PrecioCosto;
+                productoExistente.ImagenUrl = dto.ImagenUrl?.Trim() ?? string.Empty;
+                productoExistente.EsDigital = dto.EsDigital;
+                productoExistente.ControlaStock = dto.ControlaStock;
+                productoExistente.RequiereServicio = dto.RequiereServicio;
+                productoExistente.VisibleEnCatalogo = dto.VisibleEnCatalogo;
+                productoExistente.EsSuscripcion = dto.EsSuscripcion;
+                productoExistente.DiasDuracion = dto.DiasDuracion;
+                productoExistente.GarantiaDias = dto.GarantiaDias;
+                productoExistente.Proveedor = dto.Proveedor?.Trim() ?? string.Empty;
+                productoExistente.Estado = dto.Estado.Trim();
+                productoExistente.CategoriaId = dto.CategoriaId;
+                productoExistente.JuegoId = dto.JuegoId;
+
+                if (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock)
+                {
+                    productoExistente.StockMinimo = 0;
+                    productoExistente.StockActual = 0;
+                }
+                else
+                {
+                    productoExistente.StockActual = dto.StockActual;
+                    productoExistente.StockMinimo = dto.StockMinimo;
+                }
+
+                await _context.SaveChangesAsync();
+
+                return Ok(new { mensaje = "Producto actualizado correctamente.", productoId = id });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al actualizar el producto ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al actualizar el producto." });
+            }
+        }
+
+        // 6. DELETE: api/Products/5
+        [HttpDelete("{id}")]
+        [Authorize]
+        public async Task<IActionResult> DeleteProducto(int id)
+        {
+            try
+            {
+                var producto = await _context.Productos.FindAsync(id);
+                if (producto == null)
+                {
+                    return NotFound(new { mensaje = "El producto solicitado no existe." });
+                }
+
+                var tieneVentas = await _context.DetallesVentas.AnyAsync(d => d.IdProducto == id);
+                var tieneSuscripciones = await _context.Suscripciones.AnyAsync(s => s.IdProducto == id);
+
+                // Si hay trazabilidad contable o de suscripciones, pausamos el producto en lugar de eliminarlo físicamente
+                if (tieneVentas || tieneSuscripciones)
+                {
+                    producto.VisibleEnCatalogo = false;
+                    producto.Estado = "Pausado";
+                    await _context.SaveChangesAsync();
+
+                    return Ok(new
+                    {
+                        mensaje = "El producto posee registros asociados. Se ha pausado y ocultado del catálogo público para preservar el historial."
+                    });
+                }
+
+                _context.Productos.Remove(producto);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { mensaje = "Producto eliminado definitivamente de la base de datos." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al eliminar el producto ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al intentar eliminar el producto." });
+            }
         }
     }
 }
