@@ -294,30 +294,37 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // 3. GET: api/Reportes/analitica-ejecutiva
+        // 3. GET: api/Reportes/analitica-ejecutiva?mes=1&anio=2026
         [Authorize(Roles = "Administrador")]
         [HttpGet("analitica-ejecutiva")]
-        public async Task<IActionResult> GetAnaliticaEjecutiva()
+        public async Task<IActionResult> GetAnaliticaEjecutiva([FromQuery] int? mes, [FromQuery] int? anio)
         {
             try
             {
                 var ahoraNicaragua = GetNicaraguaTime();
-                var inicioMes = new DateTime(ahoraNicaragua.Year, ahoraNicaragua.Month, 1);
+
+                // Si el frontend no envía mes o año, usamos el mes y año actual de Nicaragua
+                int mesFiltro = mes.HasValue && mes.Value >= 1 && mes.Value <= 12 ? mes.Value : ahoraNicaragua.Month;
+                int anioFiltro = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
+
+                // Calculamos el rango exacto del mes solicitado
+                var inicioMes = new DateTime(anioFiltro, mesFiltro, 1);
+                var finMes = inicioMes.AddMonths(1).AddTicks(-1); // Último milisegundo del mes
 
                 var gastosDetallados = await _context.MovimientosCaja
                     .AsNoTracking()
-                    .Where(m => m.Fecha >= inicioMes && (m.Concepto == "Gasto Ordinario" || m.Tipo == "Egreso"))
+                    .Where(m => m.Fecha >= inicioMes && m.Fecha <= finMes && (m.Concepto == "Gasto Ordinario" || m.Tipo == "Egreso"))
                     .Select(m => new { m.Detalle, m.Monto })
                     .ToListAsync();
 
                 var utilidadBruta = await _context.DetallesVentas
-                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes)
+                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes && d.Venta.FechaVenta <= finMes)
                     .SumAsync(d => (decimal?)((d.PrecioUnitario - (d.Producto != null ? d.Producto.PrecioCosto : 0m)) * d.Cantidad)) ?? 0m;
 
-                // Proyección limpia para el ranking de utilidad
+                // Proyección limpia para el ranking de utilidad filtrado por el período
                 var rankingUtilidad = await _context.DetallesVentas
                     .AsNoTracking()
-                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes)
+                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes && d.Venta.FechaVenta <= finMes)
                     .Select(d => new
                     {
                         NombreProducto = d.Producto != null ? d.Producto.Nombre : "Sin Producto / Genérico",
@@ -335,11 +342,10 @@ namespace NicaplusApi.Controllers
                     .OrderByDescending(x => x.UtilidadTotal)
                     .ToListAsync();
 
-                // === CORRECCIÓN DE LA LÍNEA 339 ===
-                // 1. Obtenemos los tickets del mes proyectando solo el Tipo y el Nombre del Cliente (SQL simple)
+                // 1. Obtenemos los tickets del mes proyectando solo el Tipo y el Nombre del Cliente
                 var ticketsRaw = await _context.TicketsSoporte
                     .AsNoTracking()
-                    .Where(t => t.FechaCreacion >= inicioMes)
+                    .Where(t => t.FechaCreacion >= inicioMes && t.FechaCreacion <= finMes)
                     .Select(t => new
                     {
                         t.TipoTicket,
@@ -347,7 +353,7 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
-                // 2. Agrupamos y obtenemos los clientes distintos en memoria (LINQ to Objects)
+                // 2. Agrupamos y obtenemos los clientes distintos en memoria
                 var detalleProblemas = ticketsRaw
                     .GroupBy(t => t.TipoTicket)
                     .Select(g => new
@@ -361,7 +367,7 @@ namespace NicaplusApi.Controllers
 
                 var listaGarantias = await _context.GarantiasTickets
                     .AsNoTracking()
-                    .Where(g => g.FechaRepo >= inicioMes)
+                    .Where(g => g.FechaRepo >= inicioMes && g.FechaRepo <= finMes)
                     .Select(g => new
                     {
                         g.Motivo,
@@ -371,9 +377,10 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
+                // Renovaciones que vencieron durante este mes específico
                 var renovacionesPerdidas = await _context.Suscripciones
                     .AsNoTracking()
-                    .Where(s => s.Estado == "Vencida" && s.FechaVencimiento < ahoraNicaragua)
+                    .Where(s => s.Estado == "Vencida" && s.FechaVencimiento >= inicioMes && s.FechaVencimiento <= finMes)
                     .Select(s => new
                     {
                         Cliente = s.Cliente != null ? s.Cliente.Nombre : "Desconocido",
