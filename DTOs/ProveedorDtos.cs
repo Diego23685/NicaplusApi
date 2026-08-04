@@ -9,14 +9,14 @@ namespace NicaplusApi.DTOs
         public string RazonSocial { get; set; } = string.Empty;
 
         [StringLength(100, ErrorMessage = "El RUC/Identificación no puede exceder 100 caracteres.")]
-        public string Ruc { get; set; } = string.Empty;
+        public string? Ruc { get; set; } // Opcional
 
         [StringLength(20, ErrorMessage = "El teléfono no puede exceder 20 caracteres.")]
-        public string Telefono { get; set; } = string.Empty;
+        public string? Telefono { get; set; } // Opcional
 
-        [EmailAddress(ErrorMessage = "Formato de correo electrónico inválido.")]
+        [RegularExpression(@"^$|^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", ErrorMessage = "Formato de correo electrónico inválido.")]
         [StringLength(150, ErrorMessage = "El correo no puede exceder 150 caracteres.")]
-        public string Email { get; set; } = string.Empty;
+        public string? Email { get; set; }
     }
 
     public class ActualizarProveedorDto : CrearProveedorDto
