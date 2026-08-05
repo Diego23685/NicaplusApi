@@ -6,9 +6,11 @@ namespace NicaplusApi.DTOs
     {
         public int? IdCliente { get; set; }
 
+        public DateTime? FechaVenta { get; set; }
+
         [Required(ErrorMessage = "El método de pago es obligatorio.")]
         [StringLength(30)]
-        public string MetodoPago { get; set; } = "Efectivo"; // Efectivo, Transferencia, Tarjeta, Crédito
+        public string MetodoPago { get; set; } = "Efectivo";
 
         public DateTime? FechaVencimientoCreditoManual { get; set; }
 

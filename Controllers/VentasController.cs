@@ -152,8 +152,13 @@ namespace NicaplusApi.Controllers
             try
             {
                 var ahoraNicaragua = GetNicaraguaTime();
-                int idOperador = GetCurrentUserId();
 
+                // 👇 DETERMINAR LA FECHA EFECTIVA DE LA VENTA Y SUSCRIPCIONES
+                DateTime fechaEfectiva = (dto.FechaVenta.HasValue && dto.FechaVenta.Value != default) 
+                    ? dto.FechaVenta.Value 
+                    : ahoraNicaragua;
+
+                int idOperador = GetCurrentUserId();
                 int? idClienteFinal = (dto.IdCliente.HasValue && dto.IdCliente.Value > 0) ? dto.IdCliente : null;
 
                 if (dto.MetodoPago == "Crédito" && !idClienteFinal.HasValue)
@@ -163,15 +168,15 @@ namespace NicaplusApi.Controllers
 
                 var nuevaVenta = new Venta
                 {
-                    FechaVenta = ahoraNicaragua,
+                    FechaVenta = fechaEfectiva, // 👈 Se asigna la fecha real enviada
                     IdCliente = idClienteFinal,
                     IdUsuario = idOperador,
                     MetodoPago = dto.MetodoPago.Trim(),
-                    Total = 0m // Se calcula acumulativamente
+                    Total = 0m
                 };
 
                 _context.Ventas.Add(nuevaVenta);
-                await _context.SaveChangesAsync(); // Se persiste para obtener el ID de venta
+                await _context.SaveChangesAsync();
 
                 decimal totalAcumulado = 0m;
 
@@ -181,7 +186,6 @@ namespace NicaplusApi.Controllers
                     if (prod == null)
                         return BadRequest(new { mensaje = $"El producto con ID {itemDto.IdProducto} no existe." });
 
-                    // 1. Control de Inventario
                     if (prod.ControlaStock)
                     {
                         if (prod.StockActual < itemDto.Cantidad)
@@ -201,13 +205,11 @@ namespace NicaplusApi.Controllers
                         SubTotal = (itemDto.Cantidad * itemDto.PrecioUnitario) - itemDto.Descuento
                     };
 
-                    // 2. Lógica de Servicios Digitales y Suscripciones por AccountGroupKey
                     if (prod.EsSuscripcion)
                     {
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente asignar un cliente." });
 
-                        // Estrategia de agrupación por AccountGroupKey (Misma cuenta madre)
                         var grupoValido = await _context.PerfilesCuentas
                             .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !string.IsNullOrEmpty(p.AccountGroupKey))
                             .GroupBy(p => p.AccountGroupKey)
@@ -226,7 +228,6 @@ namespace NicaplusApi.Controllers
                         }
                         else
                         {
-                            // Contingencia: Tomar pantallas disponibles del pool general
                             perfilesAsignados = await _context.PerfilesCuentas
                                 .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
                                 .Take(itemDto.Cantidad)
@@ -245,11 +246,14 @@ namespace NicaplusApi.Controllers
                             perfil.Ocupado = true;
                             perfil.IdClienteAsignado = idClienteFinal.Value;
                             perfil.EstadoPerfil = "Asignado";
-                            perfil.FechaAsignacion = ahoraNicaragua;
+                            perfil.FechaAsignacion = fechaEfectiva; // 👈 Usar fechaEfectiva
                             _context.PerfilesCuentas.Update(perfil);
 
                             var credencial = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
                             metadataList.Add(credencial);
+
+                            // 👇 CALCULAR VENCIMIENTO A PARTIR DE LA FECHA HISTÓRICA
+                            var fechaVenc = fechaEfectiva.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30);
 
                             var suscripcion = new Suscripcion
                             {
@@ -259,9 +263,10 @@ namespace NicaplusApi.Controllers
                                 IdProducto = prod.Id,
                                 IdPerfilCuenta = perfil.Id,
                                 CostoRenovacion = itemDto.PrecioUnitario,
-                                FechaInicio = ahoraNicaragua,
-                                FechaVencimiento = ahoraNicaragua.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
-                                Estado = "Activa",
+                                FechaInicio = fechaEfectiva, // 👈 Usar fechaEfectiva
+                                FechaVencimiento = fechaVenc,
+                                // Si la fecha de vencimiento ya pasó (hace 3 meses), marcar como Vencida
+                                Estado = fechaVenc <= ahoraNicaragua ? "Vencida" : "Activa", 
                                 DetallesCredenciales = credencial
                             };
                             _context.Suscripciones.Add(suscripcion);
@@ -277,10 +282,10 @@ namespace NicaplusApi.Controllers
                 nuevaVenta.Total = totalAcumulado;
                 _context.Ventas.Update(nuevaVenta);
 
-                // 3. Registrar Movimiento Contable en Caja
+                // 3. Registrar Movimiento Contable en Caja con la fecha de la venta
                 var movimientoCaja = new MovimientoCaja
                 {
-                    Fecha = ahoraNicaragua,
+                    Fecha = fechaEfectiva, // 👈 Usar fechaEfectiva
                     Tipo = "Ingreso",
                     Concepto = "Venta",
                     Monto = totalAcumulado,
@@ -298,8 +303,8 @@ namespace NicaplusApi.Controllers
                         IdVenta = nuevaVenta.Id,
                         MontoTotal = totalAcumulado,
                         SaldoPendiente = totalAcumulado,
-                        FechaEmision = ahoraNicaragua,
-                        FechaVencimiento = dto.FechaVencimientoCreditoManual ?? ahoraNicaragua.AddDays(15),
+                        FechaEmision = fechaEfectiva, // 👈 Usar fechaEfectiva
+                        FechaVencimiento = dto.FechaVencimientoCreditoManual ?? fechaEfectiva.AddDays(15),
                         Estado = "Pendiente"
                     };
                     _context.CuentasPorCobrar.Add(cpc);
