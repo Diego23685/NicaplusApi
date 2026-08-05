@@ -187,20 +187,22 @@ namespace NicaplusApi.Controllers
                     .OrderByDescending(s => s.FechaVencimiento)
                     .ToListAsync();
 
-                // 5. Segmentación
+                // 5. Segmentación corregida
                 var serviciosActivos = new
                 {
                     TallerEquiposEnRevision = ordenesTaller
                         .Where(o => o.Estado == "Recibido" || o.Estado == "En Revisión" || o.Estado == "Listo")
                         .Select(o => new { o.Id, o.Dispositivo, o.Diagnostico, o.Estado, o.FechaIngreso }),
 
+                    // 👈 Vigentes: Cualquier suscripción cuyo periodo pagado no haya vencido aún
                     SuscripcionesVigentes = todasSuscripciones
-                        .Where(s => s.Estado == "Activa" && s.FechaVencimiento >= ahoraNicaragua)
+                        .Where(s => s.FechaVencimiento >= ahoraNicaragua)
                         .Select(s => new
                         {
                             s.Id,
                             s.NombreServicio,
                             s.TipoSuscripcion,
+                            s.Estado, // 👈 Incluimos el Estado ("Activa", "Cancelada", etc.)
                             s.FechaVencimiento,
                             DetallesCredenciales = s.PerfilCuenta != null
                                 ? $"PERFIL: {s.PerfilCuenta.NombrePerfil} | PIN: {s.PerfilCuenta.PIN} | Acceso: {s.PerfilCuenta.CorreoCuenta} / {s.PerfilCuenta.PasswordCuenta}"
@@ -214,8 +216,9 @@ namespace NicaplusApi.Controllers
                         .Where(o => o.Estado == "Entregado")
                         .Select(o => new { o.Id, o.Dispositivo, o.FechaEntrega, o.Notas }),
 
+                    // 👈 Expiradas: Solo las suscripciones que ya sobrepasaron su fecha límite de uso
                     SuscripcionesExpiradas = todasSuscripciones
-                        .Where(s => s.Estado == "Cancelada" || s.Estado == "Vencida" || s.FechaVencimiento < ahoraNicaragua)
+                        .Where(s => s.FechaVencimiento < ahoraNicaragua)
                         .Select(s => new { s.Id, s.NombreServicio, s.TipoSuscripcion, s.FechaVencimiento, s.Estado })
                 };
 
