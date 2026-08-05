@@ -45,6 +45,20 @@ namespace NicaplusApi.Controllers
             return int.TryParse(userIdClaim, out int id) ? id : 1;
         }
 
+        private int ExtraerDiasSuscripcion(string metadataDigital, int diasDuracionBase)
+        {
+            if (!string.IsNullOrEmpty(metadataDigital) && metadataDigital.StartsWith("DIAS:"))
+            {
+                var partes = metadataDigital.Split('|');
+                var diasStr = partes[0].Replace("DIAS:", "").Trim();
+                if (int.TryParse(diasStr, out int diasParseados) && diasParseados > 0)
+                {
+                    return diasParseados;
+                }
+            }
+            return diasDuracionBase > 0 ? diasDuracionBase : 30;
+        }
+
         // GET: api/Ventas
         [HttpGet]
         [Authorize(Roles = "Administrador,Socio,Ventas")]
@@ -252,8 +266,9 @@ namespace NicaplusApi.Controllers
                             var credencial = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
                             metadataList.Add(credencial);
 
-                            // 👇 CALCULAR VENCIMIENTO A PARTIR DE LA FECHA HISTÓRICA
-                            var fechaVenc = fechaEfectiva.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30);
+                            // 👇 Extraer los días enviados desde el carrito o tomar la base del producto
+                            int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
+                            var fechaVenc = fechaEfectiva.AddDays(diasEfectivos);
 
                             var suscripcion = new Suscripcion
                             {
@@ -263,9 +278,8 @@ namespace NicaplusApi.Controllers
                                 IdProducto = prod.Id,
                                 IdPerfilCuenta = perfil.Id,
                                 CostoRenovacion = itemDto.PrecioUnitario,
-                                FechaInicio = fechaEfectiva, // 👈 Usar fechaEfectiva
+                                FechaInicio = fechaEfectiva,
                                 FechaVencimiento = fechaVenc,
-                                // Si la fecha de vencimiento ya pasó (hace 3 meses), marcar como Vencida
                                 Estado = fechaVenc <= ahoraNicaragua ? "Vencida" : "Activa", 
                                 DetallesCredenciales = credencial
                             };
@@ -464,6 +478,8 @@ namespace NicaplusApi.Controllers
                             var credencial = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
                             metadataList.Add(credencial);
 
+                            int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
+
                             var nuevaSuscripcion = new Suscripcion
                             {
                                 IdCliente = idClienteFinal.Value,
@@ -473,7 +489,7 @@ namespace NicaplusApi.Controllers
                                 IdPerfilCuenta = perfil.Id,
                                 CostoRenovacion = itemDto.PrecioUnitario,
                                 FechaInicio = ventaOriginal.FechaVenta,
-                                FechaVencimiento = ventaOriginal.FechaVenta.AddDays(prod.DiasDuracion > 0 ? prod.DiasDuracion : 30),
+                                FechaVencimiento = ventaOriginal.FechaVenta.AddDays(diasEfectivos),
                                 Estado = "Activa",
                                 DetallesCredenciales = credencial
                             };

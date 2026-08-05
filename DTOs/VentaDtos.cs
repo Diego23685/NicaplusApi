@@ -32,6 +32,8 @@ namespace NicaplusApi.DTOs
 
         [Range(0, 999999.99, ErrorMessage = "El descuento no es válido.")]
         public decimal Descuento { get; set; } = 0m;
+
+        public string MetadataDigital { get; set; } = string.Empty;
     }
 
     public class ActualizarVentaDto
