@@ -28,13 +28,15 @@ namespace NicaplusApi.DTOs
     }
 
     public class TransaccionResumenDto
-    {
-        public int Id { get; set; }
-        public string Fecha { get; set; } = string.Empty;
-        public string Operador { get; set; } = string.Empty;
-        public string MetodoPago { get; set; } = string.Empty;
-        public decimal Total { get; set; }
-    }
+{
+    public int Id { get; set; }
+    public int? IdCliente { get; set; }          
+    public string Cliente { get; set; } = string.Empty; 
+    public string Fecha { get; set; } = string.Empty;
+    public string Operador { get; set; } = string.Empty;
+    public string MetodoPago { get; set; } = string.Empty;
+    public decimal Total { get; set; }
+}
 
     public class DeudorDto
     {

@@ -101,6 +101,8 @@ namespace NicaplusApi.Controllers
                     .Select(v => new TransaccionResumenDto
                     {
                         Id = v.Id,
+                        IdCliente = v.IdCliente,
+                        Cliente = v.Cliente != null ? v.Cliente.Nombre : "Mostrador General", 
                         Fecha = v.FechaVenta.ToString("yyyy-MM-dd HH:mm"),
                         Operador = v.Usuario != null ? v.Usuario.Nombre : "Sistema",
                         MetodoPago = v.MetodoPago,
