@@ -122,7 +122,7 @@ namespace NicaplusApi.Controllers
 
                 var ahoraNicaragua = GetNicaraguaTime();
 
-                // 1. Historial de Compras
+                // 1. Historial de Compras (Con el nombre del producto)
                 var compras = await _context.Ventas
                     .AsNoTracking()
                     .Where(v => v.IdCliente == id)
@@ -135,6 +135,7 @@ namespace NicaplusApi.Controllers
                         v.MetodoPago,
                         Detalles = v.Detalles.Select(d => new
                         {
+                            NombreProducto = d.Producto != null ? d.Producto.Nombre : "Producto General", // 👈 AGREGAR ESTA LÍNEA
                             d.Cantidad,
                             d.PrecioUnitario,
                             d.SubTotal,
