@@ -51,6 +51,7 @@ namespace NicaplusApi.DTOs
         public decimal PrecioVenta { get; set; }
         public string ImagenUrl { get; set; } = string.Empty;
         public bool EsDigital { get; set; }
+        public string? MetadataDigital { get; set; }
         public bool EsSuscripcion { get; set; }
         public int DiasDuracion { get; set; }
         public int StockActual { get; set; }
@@ -70,5 +71,6 @@ namespace NicaplusApi.DTOs
         public string Estado { get; set; } = null!;
         public int? CategoriaId { get; set; }
         public int? JuegoId { get; set; }
+        public int? PrimerPerfilId { get; set; }
     }
 }

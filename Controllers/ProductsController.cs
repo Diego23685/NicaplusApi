@@ -22,7 +22,7 @@ namespace NicaplusApi.Controllers
             _logger = logger;
         }
 
-        // 1. GET: api/Products (Panel de Administración)
+        // 1. GET: api/Products (Panel de Administración y Caja POS)
         [HttpGet]
         [Authorize]
         public async Task<IActionResult> GetProductos()
@@ -56,7 +56,25 @@ namespace NicaplusApi.Controllers
                         CategoriaId = p.CategoriaId,
                         CategoriaNombre = p.Categoria != null ? p.Categoria.Nombre : null,
                         JuegoId = p.JuegoId,
-                        JuegoNombre = p.Juego != null ? p.Juego.Nombre : null
+                        JuegoNombre = p.Juego != null ? p.Juego.Nombre : null,
+
+                        // 👈 Obtenemos el ID de la primera credencial
+                        PrimerPerfilId = p.EsDigital
+                            ? _context.PerfilesCuentas
+                                .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                                .OrderBy(pc => pc.Id)
+                                .Select(pc => (int?)pc.Id)
+                                .FirstOrDefault()
+                            : null,
+
+                        // 👈 Obtenemos el texto formateado de la primera credencial
+                        MetadataDigital = p.EsDigital 
+                            ? _context.PerfilesCuentas
+                                .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                                .OrderBy(pc => pc.Id)
+                                .Select(pc => $"Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}")
+                                .FirstOrDefault()
+                            : null
                     })
                     .ToListAsync();
 
@@ -69,6 +87,47 @@ namespace NicaplusApi.Controllers
             }
         }
 
+        // GET: api/Products/5/siguiente-credencial?ignorados=12,15
+        [HttpGet("{id}/siguiente-credencial")]
+        [Authorize]
+        public async Task<IActionResult> GetSiguienteCredencial(int id, [FromQuery] string? ignorados = null)
+        {
+            try
+            {
+                var idsIgnorados = string.IsNullOrWhiteSpace(ignorados)
+                    ? new List<int>()
+                    : ignorados.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                            .Select(s => int.TryParse(s.Trim(), out int val) ? val : 0)
+                            .Where(v => v > 0)
+                            .ToList();
+
+                var credencial = await _context.PerfilesCuentas
+                    .AsNoTracking()
+                    .Where(pc => pc.IdProducto == id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                    .Where(pc => !idsIgnorados.Contains(pc.Id))
+                    .OrderBy(pc => pc.Id)
+                    .Select(pc => new
+                    {
+                        disponible = true,
+                        idPerfil = pc.Id,
+                        metadataDigital = $"Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}"
+                    })
+                    .FirstOrDefaultAsync();
+
+                if (credencial == null)
+                {
+                    return Ok(new { disponible = false, metadataDigital = (string?)null, idPerfil = 0 });
+                }
+
+                return Ok(credencial);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al consultar la siguiente credencial para el producto {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al consultar la credencial." });
+            }
+        }
+
         // 2. GET: api/Products/catalogo (Público para Tienda / POS)
         [HttpGet("catalogo")]
         [AllowAnonymous]
@@ -76,7 +135,6 @@ namespace NicaplusApi.Controllers
         {
             try
             {
-                // Agrupación previa en memoria de perfiles disponibles por IdProducto para resolver N+1
                 var stockPerfilesPool = await _context.PerfilesCuentas
                     .AsNoTracking()
                     .Where(pc => !pc.Ocupado && pc.EstadoPerfil == "Disponible")
@@ -223,7 +281,6 @@ namespace NicaplusApi.Controllers
                     return NotFound(new { mensaje = "El producto que intenta actualizar no existe." });
                 }
 
-                // Actualización explicita de propiedades
                 productoExistente.Nombre = dto.Nombre.Trim();
                 productoExistente.Descripcion = dto.Descripcion?.Trim() ?? string.Empty;
                 productoExistente.PrecioVenta = dto.PrecioVenta;
@@ -279,7 +336,6 @@ namespace NicaplusApi.Controllers
                 var tieneVentas = await _context.DetallesVentas.AnyAsync(d => d.IdProducto == id);
                 var tieneSuscripciones = await _context.Suscripciones.AnyAsync(s => s.IdProducto == id);
 
-                // Si hay trazabilidad contable o de suscripciones, pausamos el producto en lugar de eliminarlo físicamente
                 if (tieneVentas || tieneSuscripciones)
                 {
                     producto.VisibleEnCatalogo = false;
