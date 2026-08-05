@@ -296,37 +296,58 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // 3. GET: api/Reportes/analitica-ejecutiva?mes=1&anio=2026
+        // 3. GET: api/Reportes/analitica-ejecutiva
         [Authorize(Roles = "Administrador")]
         [HttpGet("analitica-ejecutiva")]
-        public async Task<IActionResult> GetAnaliticaEjecutiva([FromQuery] int? mes, [FromQuery] int? anio)
+        public async Task<IActionResult> GetAnaliticaEjecutiva(
+            [FromQuery] string? tipoFiltro, 
+            [FromQuery] int? mes, 
+            [FromQuery] int? anio, 
+            [FromQuery] DateTime? fechaInicio, 
+            [FromQuery] DateTime? fechaFin)
         {
             try
             {
                 var ahoraNicaragua = GetNicaraguaTime();
 
-                // Si el frontend no envía mes o año, usamos el mes y año actual de Nicaragua
-                int mesFiltro = mes.HasValue && mes.Value >= 1 && mes.Value <= 12 ? mes.Value : ahoraNicaragua.Month;
-                int anioFiltro = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
+                DateTime inicioPeriodo;
+                DateTime finPeriodo;
 
-                // Calculamos el rango exacto del mes solicitado
-                var inicioMes = new DateTime(anioFiltro, mesFiltro, 1);
-                var finMes = inicioMes.AddMonths(1).AddTicks(-1); // Último milisegundo del mes
+                // Determinar las fechas limite segun el tipo de filtro solicitado por el frontend
+                if (tipoFiltro == "anio")
+                {
+                    int anioFiltro = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
+                    inicioPeriodo = new DateTime(anioFiltro, 1, 1, 0, 0, 0);
+                    finPeriodo = new DateTime(anioFiltro, 12, 31, 23, 59, 59, 999);
+                }
+                else if (tipoFiltro == "rango" && fechaInicio.HasValue && fechaFin.HasValue)
+                {
+                    inicioPeriodo = fechaInicio.Value.Date;
+                    finPeriodo = fechaFin.Value.Date.AddDays(1).AddTicks(-1);
+                }
+                else // Modo por defecto: "mes"
+                {
+                    int mesFiltro = mes.HasValue && mes.Value >= 1 && mes.Value <= 12 ? mes.Value : ahoraNicaragua.Month;
+                    int anioFiltro = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
+
+                    inicioPeriodo = new DateTime(anioFiltro, mesFiltro, 1);
+                    finPeriodo = inicioPeriodo.AddMonths(1).AddTicks(-1);
+                }
 
                 var gastosDetallados = await _context.MovimientosCaja
                     .AsNoTracking()
-                    .Where(m => m.Fecha >= inicioMes && m.Fecha <= finMes && (m.Concepto == "Gasto Ordinario" || m.Tipo == "Egreso"))
+                    .Where(m => m.Fecha >= inicioPeriodo && m.Fecha <= finPeriodo && (m.Concepto == "Gasto Ordinario" || m.Tipo == "Egreso"))
                     .Select(m => new { m.Detalle, m.Monto })
                     .ToListAsync();
 
                 var utilidadBruta = await _context.DetallesVentas
-                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes && d.Venta.FechaVenta <= finMes)
+                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioPeriodo && d.Venta.FechaVenta <= finPeriodo)
                     .SumAsync(d => (decimal?)((d.PrecioUnitario - (d.Producto != null ? d.Producto.PrecioCosto : 0m)) * d.Cantidad)) ?? 0m;
 
-                // Proyección limpia para el ranking de utilidad filtrado por el período
+                // Proyección para el ranking de utilidad filtrado por el período dinámico
                 var rankingUtilidad = await _context.DetallesVentas
                     .AsNoTracking()
-                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes && d.Venta.FechaVenta <= finMes)
+                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioPeriodo && d.Venta.FechaVenta <= finPeriodo)
                     .Select(d => new
                     {
                         NombreProducto = d.Producto != null ? d.Producto.Nombre : "Sin Producto / Genérico",
@@ -344,10 +365,9 @@ namespace NicaplusApi.Controllers
                     .OrderByDescending(x => x.UtilidadTotal)
                     .ToListAsync();
 
-                // 1. Obtenemos los tickets del mes proyectando solo el Tipo y el Nombre del Cliente
                 var ticketsRaw = await _context.TicketsSoporte
                     .AsNoTracking()
-                    .Where(t => t.FechaCreacion >= inicioMes && t.FechaCreacion <= finMes)
+                    .Where(t => t.FechaCreacion >= inicioPeriodo && t.FechaCreacion <= finPeriodo)
                     .Select(t => new
                     {
                         t.TipoTicket,
@@ -355,7 +375,6 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
-                // 2. Agrupamos y obtenemos los clientes distintos en memoria
                 var detalleProblemas = ticketsRaw
                     .GroupBy(t => t.TipoTicket)
                     .Select(g => new
@@ -369,7 +388,7 @@ namespace NicaplusApi.Controllers
 
                 var listaGarantias = await _context.GarantiasTickets
                     .AsNoTracking()
-                    .Where(g => g.FechaRepo >= inicioMes && g.FechaRepo <= finMes)
+                    .Where(g => g.FechaRepo >= inicioPeriodo && g.FechaRepo <= finPeriodo)
                     .Select(g => new
                     {
                         g.Motivo,
@@ -379,10 +398,10 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
-                // Renovaciones que vencieron durante este mes específico
+                // Renovaciones vencidas dentro del rango/período solicitado
                 var renovacionesPerdidas = await _context.Suscripciones
                     .AsNoTracking()
-                    .Where(s => s.Estado == "Vencida" && s.FechaVencimiento >= inicioMes && s.FechaVencimiento <= finMes)
+                    .Where(s => s.Estado == "Vencida" && s.FechaVencimiento >= inicioPeriodo && s.FechaVencimiento <= finPeriodo)
                     .Select(s => new
                     {
                         Cliente = s.Cliente != null ? s.Cliente.Nombre : "Desconocido",
