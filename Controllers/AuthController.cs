@@ -117,42 +117,65 @@ namespace NicaplusApi.Controllers
             try
             {
                 var emailLimpio = dto.Email.Trim().ToLower();
+                var telefonoLimpio = dto.Telefono.Trim();
 
-                if (await _context.Clientes.AnyAsync(c => c.Email.ToLower() == emailLimpio))
-                {
-                    return BadRequest(new { mensaje = "Ya existe una cuenta registrada con ese correo electrónico." });
-                }
+                // 1. Buscar si ya existe un cliente con ese Correo o Teléfono
+                var clienteExistente = await _context.Clientes
+                    .FirstOrDefaultAsync(c => 
+                        (!string.IsNullOrEmpty(c.Email) && c.Email.ToLower() == emailLimpio) || 
+                        (!string.IsNullOrEmpty(c.Telefono) && c.Telefono == telefonoLimpio));
 
-                if (await _context.Clientes.AnyAsync(c => c.Telefono == dto.Telefono))
+                // 2. Si el cliente ya existe y TIENE una cuenta confirmada con contraseña, indicarle que inicie sesión
+                if (clienteExistente != null && clienteExistente.EmailConfirmado && !string.IsNullOrEmpty(clienteExistente.PasswordHash))
                 {
-                    return BadRequest(new { mensaje = "El número de teléfono ya se encuentra registrado." });
+                    return BadRequest(new { mensaje = "Ya existe una cuenta activa asociada a este correo o teléfono. Por favor, inicia sesión." });
                 }
 
                 var tokenConfirmacion = Guid.NewGuid().ToString("N");
                 var expiracion = DateTime.UtcNow.AddMinutes(15);
+                Cliente cliente;
 
-                var cliente = new Cliente
+                if (clienteExistente != null)
                 {
-                    Nombre = dto.Nombre,
-                    Telefono = dto.Telefono,
-                    Email = emailLimpio,
-                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
-                    FechaRegistro = DateTime.UtcNow,
-                    PuntosAcumulados = 0,
-                    EmailConfirmado = false,
-                    TokenConfirmacion = tokenConfirmacion,  
-                    ExpiracionTokenConfirmacion = expiracion,
-                    Activo = true
-                };
+                    // 3. REUTILIZAR Y ACTUALIZAR EL CLIENTE EXISTENTE (Consolidación)
+                    cliente = clienteExistente;
+                    cliente.Nombre = dto.Nombre;
+                    cliente.Email = emailLimpio;
+                    cliente.Telefono = telefonoLimpio;
+                    cliente.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+                    cliente.TokenConfirmacion = tokenConfirmacion;
+                    cliente.ExpiracionTokenConfirmacion = expiracion;
+                    cliente.EmailConfirmado = false; // Requerir confirmación por email
+                    cliente.Activo = true;
 
-                _context.Clientes.Add(cliente);
+                    _context.Clientes.Update(cliente);
+                }
+                else
+                {
+                    // 4. CREAR UN NUEVO CLIENTE (Si no figuraba en la base de datos)
+                    cliente = new Cliente
+                    {
+                        Nombre = dto.Nombre,
+                        Telefono = telefonoLimpio,
+                        Email = emailLimpio,
+                        PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
+                        FechaRegistro = DateTime.UtcNow,
+                        PuntosAcumulados = 0,
+                        EmailConfirmado = false,
+                        TokenConfirmacion = tokenConfirmacion,
+                        ExpiracionTokenConfirmacion = expiracion,
+                        Activo = true
+                    };
+
+                    _context.Clientes.Add(cliente);
+                }
+
                 await _context.SaveChangesAsync();
 
-                // Intento aislado de envío de correo para no revertir/romper la cuenta si falla el servidor SMTP
+                // 5. Envío de correo de confirmación
                 var frontend = _configuration["Frontend:Url"];
                 var enlace = $"{frontend}/confirmar-email?token={tokenConfirmacion}";
                 var nombreSeguro = WebUtility.HtmlEncode(cliente.Nombre);
-
                 var html = ObtenerPlantillaCorreoConfirmacion(nombreSeguro, enlace);
 
                 try
@@ -163,15 +186,17 @@ namespace NicaplusApi.Controllers
                 {
                     _logger.LogError(mailEx, "No se pudo enviar el correo de confirmación al cliente {Email}", cliente.Email);
                     return Ok(new { 
-                        mensaje = "Registro exitoso, pero ocurrió un inconveniente al enviar el correo. Por favor, solicita el reenvío de confirmación." 
+                        mensaje = "Datos asociados con éxito, pero ocurrió un problema al enviar el correo. Por favor, solicita el reenvío de confirmación." 
                     });
                 }
 
-                return Ok(new { mensaje = "Registro exitoso. Por favor, revisa tu correo electrónico para activar tu cuenta." });
+                return Ok(new { 
+                    mensaje = "Registro completado con éxito. Se han asociado tus datos de compras previas. Revisa tu correo electrónico para activar tu cuenta." 
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error al registrar nuevo cliente.");
+                _logger.LogError(ex, "Error al procesar el registro de cliente.");
                 return StatusCode(500, new { mensaje = "Error interno del servidor al procesar el registro." });
             }
         }
