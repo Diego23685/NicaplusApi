@@ -80,6 +80,14 @@ namespace NicaplusApi.Controllers
                 var granTotalFacturado = totalEfectivo + totalTransferencia + totalTarjeta;
                 var balanceNetoEfectivoCaja = (granTotalFacturado + totalIngresosExtra) - (totalGastosFijos + totalComprasProveedores);
 
+                // --- CÁLCULO DE COSTO Y UTILIDAD DEL PERÍODO ---
+                var costoMercanciaVendida = await _context.DetallesVentas
+                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= fechaInicio && d.Venta.FechaVenta <= fechaFin)
+                    .SumAsync(d => (decimal?)((d.Producto != null ? d.Producto.PrecioCosto : 0m) * d.Cantidad)) ?? 0m;
+
+                var utilidadBruta = granTotalFacturado - costoMercanciaVendida;
+                var utilidadNetaReal = utilidadBruta - totalGastosFijos;
+
                 var topProductos = await _context.DetallesVentas
                     .AsNoTracking()
                     .Where(d => d.Venta != null && d.Venta.FechaVenta >= fechaInicio && d.Venta.FechaVenta <= fechaFin)
@@ -110,17 +118,20 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
-                var resultado = new ReportePersonalizadoDto
+                var resultado = new
                 {
                     Rango = $"{fechaInicio:dd/MM/yyyy} al {hasta.Date:dd/MM/yyyy}",
                     VentasTotales = totalVentasCount,
-                    Finanzas = new FinanzasResumenDto
+                    Finanzas = new
                     {
                         Efectivo = totalEfectivo,
                         Transferencia = totalTransferencia,
                         Tarjeta = totalTarjeta,
                         TotalFacturado = granTotalFacturado,
+                        CostoMercancia = costoMercanciaVendida,
+                        UtilidadBruta = utilidadBruta,
                         GastosOperativos = totalGastosFijos,
+                        UtilidadNeta = utilidadNetaReal,
                         InversionCompras = totalComprasProveedores,
                         BalanceCajaReal = balanceNetoEfectivoCaja
                     },
@@ -296,7 +307,6 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // 3. GET: api/Reportes/analitica-ejecutiva
         [Authorize(Roles = "Administrador")]
         [HttpGet("analitica-ejecutiva")]
         public async Task<IActionResult> GetAnaliticaEjecutiva(
@@ -309,42 +319,57 @@ namespace NicaplusApi.Controllers
             try
             {
                 var ahoraNicaragua = GetNicaraguaTime();
-
                 DateTime inicioPeriodo;
                 DateTime finPeriodo;
 
-                // Determinar las fechas limite segun el tipo de filtro solicitado por el frontend
-                if (tipoFiltro == "anio")
+                switch (tipoFiltro?.ToLower())
                 {
-                    int anioFiltro = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
-                    inicioPeriodo = new DateTime(anioFiltro, 1, 1, 0, 0, 0);
-                    finPeriodo = new DateTime(anioFiltro, 12, 31, 23, 59, 59, 999);
-                }
-                else if (tipoFiltro == "rango" && fechaInicio.HasValue && fechaFin.HasValue)
-                {
-                    inicioPeriodo = fechaInicio.Value.Date;
-                    finPeriodo = fechaFin.Value.Date.AddDays(1).AddTicks(-1);
-                }
-                else // Modo por defecto: "mes"
-                {
-                    int mesFiltro = mes.HasValue && mes.Value >= 1 && mes.Value <= 12 ? mes.Value : ahoraNicaragua.Month;
-                    int anioFiltro = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
+                    case "hoy":
+                        inicioPeriodo = ahoraNicaragua.Date;
+                        finPeriodo = inicioPeriodo.AddDays(1).AddTicks(-1);
+                        break;
 
-                    inicioPeriodo = new DateTime(anioFiltro, mesFiltro, 1);
-                    finPeriodo = inicioPeriodo.AddMonths(1).AddTicks(-1);
+                    case "semana":
+                        int diasLunes = ((int)ahoraNicaragua.DayOfWeek - 1 + 7) % 7;
+                        inicioPeriodo = ahoraNicaragua.Date.AddDays(-diasLunes);
+                        finPeriodo = inicioPeriodo.AddDays(7).AddTicks(-1);
+                        break;
+
+                    case "anio":
+                        int anioFiltro = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
+                        inicioPeriodo = new DateTime(anioFiltro, 1, 1, 0, 0, 0);
+                        finPeriodo = new DateTime(anioFiltro, 12, 31, 23, 59, 59, 999);
+                        break;
+
+                    case "rango":
+                        if (!fechaInicio.HasValue || !fechaFin.HasValue)
+                            return BadRequest("Debe especificar fechaInicio y fechaFin para el filtro de rango.");
+                        inicioPeriodo = fechaInicio.Value.Date;
+                        finPeriodo = fechaFin.Value.Date.AddDays(1).AddTicks(-1);
+                        break;
+
+                    case "mes":
+                    default:
+                        int mesFiltro = mes.HasValue && mes.Value >= 1 && mes.Value <= 12 ? mes.Value : ahoraNicaragua.Month;
+                        int anioMes = anio.HasValue && anio.Value >= 2020 ? anio.Value : ahoraNicaragua.Year;
+                        inicioPeriodo = new DateTime(anioMes, mesFiltro, 1);
+                        finPeriodo = inicioPeriodo.AddMonths(1).AddTicks(-1);
+                        break;
                 }
 
                 var gastosDetallados = await _context.MovimientosCaja
                     .AsNoTracking()
                     .Where(m => m.Fecha >= inicioPeriodo && m.Fecha <= finPeriodo && (m.Concepto == "Gasto Ordinario" || m.Tipo == "Egreso"))
-                    .Select(m => new { m.Detalle, m.Monto })
+                    .Select(m => new { detalle = m.Detalle, monto = m.Monto })
                     .ToListAsync();
 
                 var utilidadBruta = await _context.DetallesVentas
                     .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioPeriodo && d.Venta.FechaVenta <= finPeriodo)
                     .SumAsync(d => (decimal?)((d.PrecioUnitario - (d.Producto != null ? d.Producto.PrecioCosto : 0m)) * d.Cantidad)) ?? 0m;
 
-                // Proyección para el ranking de utilidad filtrado por el período dinámico
+                var totalGastos = gastosDetallados.Sum(g => g.monto);
+                var utilidadNeta = utilidadBruta - totalGastos;
+
                 var rankingUtilidad = await _context.DetallesVentas
                     .AsNoTracking()
                     .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioPeriodo && d.Venta.FechaVenta <= finPeriodo)
@@ -365,46 +390,18 @@ namespace NicaplusApi.Controllers
                     .OrderByDescending(x => x.UtilidadTotal)
                     .ToListAsync();
 
-                var ticketsRaw = await _context.TicketsSoporte
-                    .AsNoTracking()
-                    .Where(t => t.FechaCreacion >= inicioPeriodo && t.FechaCreacion <= finPeriodo)
-                    .Select(t => new
-                    {
-                        t.TipoTicket,
-                        ClienteNombre = t.Cliente != null ? t.Cliente.Nombre : "Cliente Anónimo"
-                    })
-                    .ToListAsync();
-
-                var detalleProblemas = ticketsRaw
-                    .GroupBy(t => t.TipoTicket)
-                    .Select(g => new
-                    {
-                        Motivo = g.Key,
-                        Frecuencia = g.Count(),
-                        ClientesAfectados = g.Select(x => x.ClienteNombre).Distinct().ToList()
-                    })
-                    .OrderByDescending(x => x.Frecuencia)
-                    .ToList();
-
                 var listaGarantias = await _context.GarantiasTickets
                     .AsNoTracking()
                     .Where(g => g.FechaRepo >= inicioPeriodo && g.FechaRepo <= finPeriodo)
-                    .Select(g => new
-                    {
-                        g.Motivo,
-                        g.CostoReposicion,
-                        Cliente = g.Cliente != null ? g.Cliente.Nombre : "Cliente Desconocido",
-                        Fecha = g.FechaRepo
-                    })
+                    .Select(g => new { g.CostoReposicion, g.Motivo, Fecha = g.FechaRepo })
                     .ToListAsync();
 
-                // Renovaciones vencidas dentro del rango/período solicitado
                 var renovacionesPerdidas = await _context.Suscripciones
                     .AsNoTracking()
                     .Where(s => s.Estado == "Vencida" && s.FechaVencimiento >= inicioPeriodo && s.FechaVencimiento <= finPeriodo)
                     .Select(s => new
                     {
-                        Cliente = s.Cliente != null ? s.Cliente.Nombre : "Desconocido",
+                        nombre = s.Cliente != null ? s.Cliente.Nombre : "Desconocido",
                         s.NombreServicio,
                         s.FechaVencimiento
                     })
@@ -412,16 +409,17 @@ namespace NicaplusApi.Controllers
 
                 return Ok(new
                 {
-                    ResumenFinanciero = new
+                    rango = $"{inicioPeriodo:dd/MM/yyyy} al {finPeriodo:dd/MM/yyyy}",
+                    resumenFinanciero = new
                     {
-                        UtilidadBruta = utilidadBruta,
-                        GastosDesglosados = gastosDetallados,
-                        TotalGastos = gastosDetallados.Sum(g => g.Monto)
+                        utilidadBruta = utilidadBruta,
+                        gastosTotales = totalGastos,
+                        utilidadNeta = utilidadNeta,
+                        gastosDesglosados = gastosDetallados
                     },
-                    RankingServicios = rankingUtilidad,
-                    ProblemasRecurrentes = detalleProblemas,
-                    HistorialGarantias = listaGarantias,
-                    RenovacionesPerdidas = renovacionesPerdidas
+                    rankingServicios = rankingUtilidad,
+                    historialGarantias = listaGarantias,
+                    renovacionesPerdidas = renovacionesPerdidas
                 });
             }
             catch (Exception ex)
