@@ -9,7 +9,7 @@ namespace NicaplusApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize] // Exclusivo para gestión administrativa
+    [Authorize]
     public class ProveedoresController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
@@ -38,7 +38,6 @@ namespace NicaplusApi.Controllers
             return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
         }
 
-        // 1. GET: api/Proveedores
         [HttpGet]
         public async Task<IActionResult> Get()
         {
@@ -58,13 +57,52 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // 2. GET: api/Proveedores/analisis-rendimiento
+        // NUEVO: GET: api/Proveedores/compras (Historial de Compras)
+        [HttpGet("compras")]
+        public async Task<IActionResult> GetHistorialCompras()
+        {
+            try
+            {
+                var compras = await _context.ComprasProveedores
+                    .AsNoTracking()
+                    .Include(c => c.Proveedor)
+                    .Include(c => c.Detalles!)
+                        .ThenInclude(d => d.Producto)
+                    .OrderByDescending(c => c.Id)
+                    .Select(c => new CompraResumenDto
+                    {
+                        Id = c.Id,
+                        IdProveedor = c.IdProveedor,
+                        ProveedorNombre = c.Proveedor != null ? c.Proveedor.RazonSocial : "Proveedor General",
+                        FechaCompra = c.FechaCompra.ToString("yyyy-MM-dd HH:mm:ss"),
+                        TotalCompra = c.TotalCompra,
+                        Detalles = c.Detalles.Select(d => new DetalleCompraResumenDto
+                        {
+                            Id = d.Id,
+                            IdProducto = d.IdProducto,
+                            ProductoNombre = d.Producto != null ? d.Producto.Nombre : "Producto General",
+                            Cantidad = d.Cantidad,
+                            CostoUnitario = d.CostoUnitario,
+                            SubTotal = d.Cantidad * d.CostoUnitario,
+                            GarantiaDiasPactada = d.GarantiaDiasPactada
+                        }).ToList()
+                    })
+                    .ToListAsync();
+
+                return Ok(compras);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener historial de compras.");
+                return StatusCode(500, new { mensaje = "Error interno al obtener el historial de compras." });
+            }
+        }
+
         [HttpGet("analisis-rendimiento")]
         public async Task<IActionResult> GetAnalisisRendimiento()
         {
             try
             {
-                // 1. Obtenemos las compras y sus detalles agregados agrupados por proveedor
                 var comprasPorProveedor = await _context.ComprasProveedores
                     .AsNoTracking()
                     .GroupBy(c => c.IdProveedor)
@@ -79,13 +117,11 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
-                // 2. Obtenemos la lista general de proveedores
                 var proveedores = await _context.Proveedores
                     .AsNoTracking()
                     .Select(p => new { p.Id, p.RazonSocial, p.Telefono })
                     .ToListAsync();
 
-                // 3. Cruzamos y calculamos el Score de Confiabilidad en memoria
                 var resultadoFinal = proveedores.Select(p =>
                 {
                     var stats = comprasPorProveedor.FirstOrDefault(c => c.IdProveedor == p.Id);
@@ -120,18 +156,15 @@ namespace NicaplusApi.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error al calcular el análisis de rendimiento de proveedores.");
-                return StatusCode(500, new { mensaje = "Error interno al generar el informe CRM de proveedores." });
+                return StatusCode(500, new { mensaje = "Error interno al generar el informe." });
             }
         }
 
-        // 3. POST: api/Proveedores
         [HttpPost]
         public async Task<IActionResult> Post([FromBody] CrearProveedorDto dto)
         {
             if (!ModelState.IsValid)
-            {
-                return BadRequest(new { mensaje = "Datos del proveedor incompletos o incorrectos.", detalles = ModelState });
-            }
+                return BadRequest(new { mensaje = "Datos incompletos.", detalles = ModelState });
 
             try
             {
@@ -146,40 +179,29 @@ namespace NicaplusApi.Controllers
                 _context.Proveedores.Add(proveedor);
                 await _context.SaveChangesAsync();
 
-                return Ok(new
-                {
-                    mensaje = "Proveedor registrado exitosamente.",
-                    proveedor
-                });
+                return Ok(new { mensaje = "Proveedor registrado exitosamente.", proveedor });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error al registrar el proveedor {RazonSocial}", dto.RazonSocial);
-                return StatusCode(500, new { mensaje = "Error interno al guardar el proveedor." });
+                _logger.LogError(ex, "Error al registrar el proveedor.");
+                return StatusCode(500, new { mensaje = "Error interno al guardar." });
             }
         }
 
-        // 4. PUT: api/Proveedores/5
         [HttpPut("{id}")]
         public async Task<IActionResult> Put(int id, [FromBody] ActualizarProveedorDto dto)
         {
             if (id != dto.Id)
-            {
-                return BadRequest(new { mensaje = "El ID en la URL no coincide con el cuerpo del modelo." });
-            }
+                return BadRequest(new { mensaje = "El ID en la URL no coincide con el cuerpo." });
 
             if (!ModelState.IsValid)
-            {
-                return BadRequest(new { mensaje = "Datos de actualización inválidos.", detalles = ModelState });
-            }
+                return BadRequest(new { mensaje = "Datos de actualización inválidos." });
 
             try
             {
                 var proveedorExistente = await _context.Proveedores.FindAsync(id);
                 if (proveedorExistente == null)
-                {
                     return NotFound(new { mensaje = "El proveedor solicitado no existe." });
-                }
 
                 proveedorExistente.RazonSocial = dto.RazonSocial.Trim();
                 proveedorExistente.Ruc = dto.Ruc?.Trim() ?? string.Empty;
@@ -187,17 +209,15 @@ namespace NicaplusApi.Controllers
                 proveedorExistente.Email = dto.Email?.Trim() ?? string.Empty;
 
                 await _context.SaveChangesAsync();
-
-                return Ok(new { mensaje = "Información del proveedor actualizada correctamente.", proveedorId = id });
+                return Ok(new { mensaje = "Información actualizada correctamente.", proveedorId = id });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error al actualizar el proveedor ID {Id}", id);
-                return StatusCode(500, new { mensaje = "Error interno al actualizar los datos del proveedor." });
+                _logger.LogError(ex, "Error al actualizar proveedor.");
+                return StatusCode(500, new { mensaje = "Error interno al actualizar." });
             }
         }
 
-        // 5. DELETE: api/Proveedores/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
@@ -205,9 +225,7 @@ namespace NicaplusApi.Controllers
             {
                 var proveedor = await _context.Proveedores.FindAsync(id);
                 if (proveedor == null)
-                {
                     return NotFound(new { mensaje = "El proveedor solicitado no existe." });
-                }
 
                 var comprasAsociadas = await _context.ComprasProveedores
                     .AsNoTracking()
@@ -233,28 +251,23 @@ namespace NicaplusApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error al eliminar el proveedor ID {Id}", id);
-                return StatusCode(500, new { mensaje = "Error interno al eliminar el proveedor." });
+                _logger.LogError(ex, "Error al eliminar proveedor.");
+                return StatusCode(500, new { mensaje = "Error interno al eliminar." });
             }
         }
 
-        // 6. POST: api/Proveedores/compras
         [HttpPost("compras")]
         public async Task<IActionResult> RegistrarCompra([FromBody] RegistrarCompraProveedorDto dto)
         {
             if (!ModelState.IsValid)
-            {
                 return BadRequest(new { mensaje = "Los datos de la compra son inválidos.", detalles = ModelState });
-            }
 
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 var proveedor = await _context.Proveedores.FindAsync(dto.IdProveedor);
                 if (proveedor == null)
-                {
                     return BadRequest(new { mensaje = "El proveedor especificado no existe." });
-                }
 
                 var ahoraNicaragua = GetNicaraguaTime();
 
@@ -277,15 +290,21 @@ namespace NicaplusApi.Controllers
                         return BadRequest(new { mensaje = $"El producto con ID {item.IdProducto} no existe." });
                     }
 
-                    // Aumento de inventario físico y actualización de costos
                     if (producto.ControlaStock && !producto.EsDigital)
                     {
                         producto.StockActual += item.Cantidad;
+                        if (producto.Estado == "Agotado" && producto.StockActual > 0) producto.Estado = "Activo";
                     }
 
                     producto.PrecioCosto = item.CostoUnitario;
                     producto.GarantiaDias = item.GarantiaDiasPactada;
                     producto.Proveedor = proveedor.RazonSocial;
+
+                    // NUEVO: Si se envió un nuevo PrecioVenta, se actualiza el catálogo al instante
+                    if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
+                    {
+                        producto.PrecioVenta = item.NuevoPrecioVenta.Value;
+                    }
 
                     nuevaCompra.Detalles.Add(new DetalleCompraProveedor
                     {
@@ -296,14 +315,13 @@ namespace NicaplusApi.Controllers
                     });
                 }
 
-                // Generación automática del egreso contable en caja
                 var egresoCaja = new MovimientoCaja
                 {
                     Fecha = ahoraNicaragua,
                     Tipo = "Egreso",
                     Concepto = "Compra Proveedor",
                     Monto = dto.TotalCompra,
-                    Detalle = $"Adquisición de mercancía/lote a proveedor: {proveedor.RazonSocial} (ID: {proveedor.Id})",
+                    Detalle = $"Adquisición a proveedor: {proveedor.RazonSocial} (ID: {proveedor.Id})",
                     CompraProveedor = nuevaCompra
                 };
 
@@ -314,7 +332,7 @@ namespace NicaplusApi.Controllers
 
                 return Ok(new
                 {
-                    mensaje = "Compra registrada y procesada correctamente en inventario y caja.",
+                    mensaje = "Compra registrada, stock incrementado y egreso contable generado.",
                     compraId = nuevaCompra.Id,
                     total = nuevaCompra.TotalCompra
                 });
@@ -322,8 +340,61 @@ namespace NicaplusApi.Controllers
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                _logger.LogError(ex, "Error crítico durante la transacción de compra a proveedor.");
-                return StatusCode(500, new { mensaje = "Error interno al procesar la compra e ingresar el stock." });
+                _logger.LogError(ex, "Error al procesar la compra.");
+                return StatusCode(500, new { mensaje = "Error interno al procesar la compra." });
+            }
+        }
+
+        // NUEVO: DELETE: api/Proveedores/compras/5 (Anulación / Reversión de Compra)
+        [HttpDelete("compras/{id}")]
+        public async Task<IActionResult> AnularCompra(int id)
+        {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                var compra = await _context.ComprasProveedores
+                    .Include(c => c.Detalles)
+                    .FirstOrDefaultAsync(c => c.Id == id);
+
+                if (compra == null)
+                    return NotFound(new { mensaje = "La orden de compra no existe." });
+
+                // 1. Revertir Stock
+                foreach (var detalle in compra.Detalles)
+                {
+                    var prod = await _context.Productos.FindAsync(detalle.IdProducto);
+                    if (prod != null && prod.ControlaStock && !prod.EsDigital)
+                    {
+                        prod.StockActual -= detalle.Cantidad;
+                        if (prod.StockActual <= 0)
+                        {
+                            prod.StockActual = 0;
+                            prod.Estado = "Agotado";
+                        }
+                    }
+                }
+
+                // 2. Anular / Eliminar Movimiento de Caja asociado
+                var egresoCaja = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdCompraProveedor == id);
+                if (egresoCaja != null)
+                {
+                    _context.MovimientosCaja.Remove(egresoCaja);
+                }
+
+                // 3. Eliminar Detalles y Registro de Compra
+                _context.DetallesComprasProveedores.RemoveRange(compra.Detalles);
+                _context.ComprasProveedores.Remove(compra);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { mensaje = $"Orden de compra #{id} anulada. Se descontó el stock y se revirtió el egreso en caja." });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "Error al anular la compra #{Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al anular la orden de compra." });
             }
         }
     }
