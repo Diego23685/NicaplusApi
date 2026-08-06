@@ -73,6 +73,10 @@ namespace NicaplusApi.Controllers
                     .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
                     .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
+                var totalCredito = await _context.Ventas
+                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin && v.MetodoPago == "Crédito")
+                    .SumAsync(v => (decimal?)v.Total) ?? 0m;
+
                 var totalComprasProveedores = await _context.MovimientosCaja
                     .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Concepto == "Compra Proveedor")
                     .SumAsync(m => (decimal?)m.Monto) ?? 0m;
@@ -167,6 +171,7 @@ namespace NicaplusApi.Controllers
                         Efectivo = totalEfectivo,
                         Transferencia = totalTransferencia,
                         Tarjeta = totalTarjeta,
+                        Credito = totalCredito,
                         TotalFacturado = granTotalFacturado,
                         CostoMercancia = costoMercanciaVendida,
                         UtilidadBruta = utilidadBruta,
