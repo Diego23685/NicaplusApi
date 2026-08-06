@@ -167,7 +167,6 @@ namespace NicaplusApi.Controllers
             {
                 var ahoraNicaragua = GetNicaraguaTime();
 
-                // 👇 DETERMINAR LA FECHA EFECTIVA DE LA VENTA Y SUSCRIPCIONES
                 DateTime fechaEfectiva = (dto.FechaVenta.HasValue && dto.FechaVenta.Value != default) 
                     ? dto.FechaVenta.Value 
                     : ahoraNicaragua;
@@ -182,7 +181,7 @@ namespace NicaplusApi.Controllers
 
                 var nuevaVenta = new Venta
                 {
-                    FechaVenta = fechaEfectiva, // 👈 Se asigna la fecha real enviada
+                    FechaVenta = fechaEfectiva,
                     IdCliente = idClienteFinal,
                     IdUsuario = idOperador,
                     MetodoPago = dto.MetodoPago.Trim(),
@@ -260,19 +259,19 @@ namespace NicaplusApi.Controllers
                             perfil.Ocupado = true;
                             perfil.IdClienteAsignado = idClienteFinal.Value;
                             perfil.EstadoPerfil = "Asignado";
-                            perfil.FechaAsignacion = fechaEfectiva; // 👈 Usar fechaEfectiva
+                            perfil.FechaAsignacion = fechaEfectiva;
                             _context.PerfilesCuentas.Update(perfil);
 
                             var credencial = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
                             metadataList.Add(credencial);
 
-                            // 👇 Extraer los días enviados desde el carrito o tomar la base del producto
                             int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
                             var fechaVenc = fechaEfectiva.AddDays(diasEfectivos);
 
                             var suscripcion = new Suscripcion
                             {
                                 IdCliente = idClienteFinal.Value,
+                                IdVenta = nuevaVenta.Id, // 👈 Asignado correctamente
                                 NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
                                 TipoSuscripcion = "Digital",
                                 IdProducto = prod.Id,
@@ -296,10 +295,9 @@ namespace NicaplusApi.Controllers
                 nuevaVenta.Total = totalAcumulado;
                 _context.Ventas.Update(nuevaVenta);
 
-                // 3. Registrar Movimiento Contable en Caja con la fecha de la venta
                 var movimientoCaja = new MovimientoCaja
                 {
-                    Fecha = fechaEfectiva, // 👈 Usar fechaEfectiva
+                    Fecha = fechaEfectiva,
                     Tipo = "Ingreso",
                     Concepto = "Venta",
                     Monto = totalAcumulado,
@@ -308,7 +306,6 @@ namespace NicaplusApi.Controllers
                 };
                 _context.MovimientosCaja.Add(movimientoCaja);
 
-                // 4. Registro de Crédito si aplica
                 if (nuevaVenta.MetodoPago == "Crédito" && idClienteFinal.HasValue)
                 {
                     var cpc = new CuentaPorCobrar
@@ -317,7 +314,7 @@ namespace NicaplusApi.Controllers
                         IdVenta = nuevaVenta.Id,
                         MontoTotal = totalAcumulado,
                         SaldoPendiente = totalAcumulado,
-                        FechaEmision = fechaEfectiva, // 👈 Usar fechaEfectiva
+                        FechaEmision = fechaEfectiva,
                         FechaVencimiento = dto.FechaVencimientoCreditoManual ?? fechaEfectiva.AddDays(15),
                         Estado = "Pendiente"
                     };
@@ -364,7 +361,7 @@ namespace NicaplusApi.Controllers
                 int? idClienteFinal = (dto.IdCliente.HasValue && dto.IdCliente.Value > 0) ? dto.IdCliente : null;
 
                 // ==========================================
-                // 1. REVERSIÓN TOTAL DE LA VENTA ANTERIOR
+                // 1. REVERSIÓN DE LA VENTA ANTERIOR
                 // ==========================================
                 foreach (var detalleOrig in ventaOriginal.Detalles)
                 {
@@ -376,10 +373,15 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // Reversión limpia de Suscripciones y Perfiles asociados
+                // Obtener perfiles que estaban asignados a esta venta para no tomarlos como "ocupados por otros"
                 var suscripcionesViejas = await _context.Suscripciones
-                    .Where(s => s.IdCliente == ventaOriginal.IdCliente && s.FechaInicio == ventaOriginal.FechaVenta)
+                    .Where(s => s.IdVenta == id)
                     .ToListAsync();
+
+                var idsPerfilesPropios = suscripcionesViejas
+                    .Where(s => s.IdPerfilCuenta.HasValue)
+                    .Select(s => s.IdPerfilCuenta!.Value)
+                    .ToList();
 
                 foreach (var sus in suscripcionesViejas)
                 {
@@ -398,7 +400,7 @@ namespace NicaplusApi.Controllers
 
                 _context.Suscripciones.RemoveRange(suscripcionesViejas);
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
-                await _context.SaveChangesAsync();
+                await _context.SaveChangesAsync(); // Se liberan perfiles en BD antes de re-asignar
 
                 // ==========================================
                 // 2. APLICACIÓN DE NUEVOS VALORES Y RE-ASIGNACIÓN
@@ -438,29 +440,11 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        var grupoValido = await _context.PerfilesCuentas
-                            .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !string.IsNullOrEmpty(p.AccountGroupKey))
-                            .GroupBy(p => p.AccountGroupKey)
-                            .Where(g => g.Count() >= itemDto.Cantidad)
-                            .Select(g => g.Key)
-                            .FirstOrDefaultAsync();
-
-                        List<PerfilCuenta> perfilesDisponibles;
-
-                        if (!string.IsNullOrEmpty(grupoValido))
-                        {
-                            perfilesDisponibles = await _context.PerfilesCuentas
-                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.AccountGroupKey == grupoValido)
-                                .Take(itemDto.Cantidad)
-                                .ToListAsync();
-                        }
-                        else
-                        {
-                            perfilesDisponibles = await _context.PerfilesCuentas
-                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
-                                .Take(itemDto.Cantidad)
-                                .ToListAsync();
-                        }
+                        // Búsqueda de perfiles disponibles (incluyendo los que pertenecían a esta misma venta y acaban de liberarse)
+                        var perfilesDisponibles = await _context.PerfilesCuentas
+                            .Where(p => p.IdProducto == prod.Id && (!p.Ocupado || idsPerfilesPropios.Contains(p.Id)))
+                            .Take(itemDto.Cantidad)
+                            .ToListAsync();
 
                         if (perfilesDisponibles.Count < itemDto.Cantidad)
                             return BadRequest(new { mensaje = $"No existen suficientes pantallas disponibles para '{prod.Nombre}'." });
@@ -483,6 +467,7 @@ namespace NicaplusApi.Controllers
                             var nuevaSuscripcion = new Suscripcion
                             {
                                 IdCliente = idClienteFinal.Value,
+                                IdVenta = id, // 👈 Asignación de venta
                                 NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
                                 TipoSuscripcion = "Digital",
                                 IdProducto = prod.Id,
@@ -585,18 +570,10 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 2. Liberación de Perfiles y Eliminación de Suscripciones
-                List<Suscripcion> suscripciones;
-                if (venta.IdCliente.HasValue)
-                {
-                    suscripciones = await _context.Suscripciones
-                        .Where(s => s.IdCliente == venta.IdCliente.Value && s.FechaInicio == venta.FechaVenta)
-                        .ToListAsync();
-                }
-                else
-                {
-                    suscripciones = new List<Suscripcion>();
-                }
+                // 2. Liberación de Perfiles y Eliminación Directa por IdVenta
+                var suscripciones = await _context.Suscripciones
+                    .Where(s => s.IdVenta == id)
+                    .ToListAsync();
 
                 foreach (var sus in suscripciones)
                 {
