@@ -38,6 +38,7 @@ namespace NicaplusApi.Controllers
         #region Endpoints Administrativos / Usuarios
 
         [HttpPost("register")]
+        [Authorize(Roles = "Administrador")]
         public async Task<IActionResult> Register([FromBody] RegistroDto dto)
         {
             try
