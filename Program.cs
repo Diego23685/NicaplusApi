@@ -53,7 +53,9 @@ builder.Services.AddCors(options =>
                   "https://www.nicaplusgaming.online", // ◄ Agregamos el catálogo de clientes
                   "http://localhost:5173", // ◄ Agregamos el origen de la aplicación frontend
                   "http://administration.localhost:5173", // ◄ Agregamos el origen de la aplicación frontend para administración
-                  "https://nicaplus-web-git-mobile-version-nicaplus-gaming.vercel.app"
+                  "https://nicaplus-web-git-mobile-version-nicaplus-gaming.vercel.app",
+                  "http://localhost",
+                  "https://localhost"// ◄ Agregamos el origen de la aplicación frontend para administración
               )
               .AllowAnyHeader()
               .AllowAnyMethod()
