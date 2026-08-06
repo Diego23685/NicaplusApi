@@ -5,7 +5,7 @@ namespace NicaplusApi.DTOs.Caja
     public class CrearMovimientoCajaDto
     {
         [Required(ErrorMessage = "El tipo de movimiento es requerido.")]
-        public string Tipo { get; set; } = null!; // "Ingreso" o "Egreso"
+        public string Tipo { get; set; } = null!;
 
         [Required(ErrorMessage = "El concepto es requerido.")]
         public string Concepto { get; set; } = null!;
@@ -13,7 +13,7 @@ namespace NicaplusApi.DTOs.Caja
         [Range(0.01, double.MaxValue, ErrorMessage = "El monto debe ser mayor a 0.")]
         public decimal Monto { get; set; }
 
-        public string? Detalle { get; set; } // Ajustado de Descripcion a Detalle
+        public string? Detalle { get; set; }
 
         public DateTime? Fecha { get; set; }
     }
@@ -24,7 +24,8 @@ namespace NicaplusApi.DTOs.Caja
         public string Tipo { get; set; } = null!;
         public string Concepto { get; set; } = null!;
         public decimal Monto { get; set; }
-        public string? Detalle { get; set; } // Ajustado de Descripcion a Detalle
+        public string? Detalle { get; set; }
         public DateTime Fecha { get; set; }
+        public bool EsAutomatico { get; set; } // 👈 Informa al frontend si proviene de Venta/Compra
     }
 }
