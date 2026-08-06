@@ -76,6 +76,7 @@ namespace NicaplusApi.Controllers
                         ProveedorNombre = c.Proveedor != null ? c.Proveedor.RazonSocial : "Proveedor General",
                         FechaCompra = c.FechaCompra.ToString("yyyy-MM-dd HH:mm:ss"),
                         TotalCompra = c.TotalCompra,
+                        Observaciones = c.Observaciones, // Incluir observaciones en el resumen
                         Detalles = c.Detalles.Select(d => new DetalleCompraResumenDto
                         {
                             Id = d.Id,
@@ -276,6 +277,7 @@ namespace NicaplusApi.Controllers
                     IdProveedor = dto.IdProveedor,
                     FechaCompra = ahoraNicaragua,
                     TotalCompra = dto.TotalCompra,
+                    Observaciones = dto.Observaciones?.Trim(),
                     Detalles = new List<DetalleCompraProveedor>()
                 };
 
@@ -388,6 +390,7 @@ namespace NicaplusApi.Controllers
                 // 2. Aplicar los nuevos datos
                 compraOriginal.IdProveedor = dto.IdProveedor;
                 compraOriginal.TotalCompra = dto.TotalCompra;
+                compraOriginal.Observaciones = dto.Observaciones?.Trim();
                 compraOriginal.Detalles = new List<DetalleCompraProveedor>();
 
                 foreach (var item in dto.Detalles)

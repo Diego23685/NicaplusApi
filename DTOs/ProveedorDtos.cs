@@ -54,6 +54,9 @@ namespace NicaplusApi.DTOs
 
         [Range(0.01, double.MaxValue)]
         public decimal TotalCompra { get; set; }
+
+        [StringLength(500)]
+        public string? Observaciones { get; set; } // Campo opcional para notas adicionales
     }
 
     public class CompraResumenDto
@@ -63,6 +66,7 @@ namespace NicaplusApi.DTOs
         public string ProveedorNombre { get; set; } = string.Empty;
         public string FechaCompra { get; set; } = string.Empty;
         public decimal TotalCompra { get; set; }
+        public string? Observaciones { get; set; } // Campo opcional para notas adicionales
         public List<DetalleCompraResumenDto> Detalles { get; set; } = new();
     }
 

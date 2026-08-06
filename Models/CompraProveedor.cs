@@ -24,6 +24,8 @@ namespace NicaplusApi.Models
         [ForeignKey("IdProveedor")]
         public Proveedor? Proveedor { get; set; }
 
+        public string? Observaciones { get; set; } // Campo opcional para notas adicionales sobre la compra
+
         public ICollection<DetalleCompraProveedor> Detalles { get; set; } = new List<DetalleCompraProveedor>();
     }
 
