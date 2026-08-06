@@ -271,7 +271,7 @@ namespace NicaplusApi.Controllers
                             var suscripcion = new Suscripcion
                             {
                                 IdCliente = idClienteFinal.Value,
-                                IdVenta = nuevaVenta.Id, // 👈 Asignado correctamente
+                                IdVenta = nuevaVenta.Id,
                                 NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
                                 TipoSuscripcion = "Digital",
                                 IdProducto = prod.Id,
@@ -373,7 +373,7 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // Obtener perfiles que estaban asignados a esta venta para no tomarlos como "ocupados por otros"
+                // Obtener suscripciones asociadas a esta venta
                 var suscripcionesViejas = await _context.Suscripciones
                     .Where(s => s.IdVenta == id)
                     .ToListAsync();
@@ -383,24 +383,41 @@ namespace NicaplusApi.Controllers
                     .Select(s => s.IdPerfilCuenta!.Value)
                     .ToList();
 
-                foreach (var sus in suscripcionesViejas)
+                if (suscripcionesViejas.Any())
                 {
-                    if (sus.IdPerfilCuenta.HasValue)
+                    var idsSuscripcionesViejas = suscripcionesViejas.Select(s => s.Id).ToList();
+
+                    // Limpiar registros dependientes en la tabla Renovaciones antes de eliminar las suscripciones
+                    var renovacionesViejas = await _context.Renovaciones
+                        .Where(r => idsSuscripcionesViejas.Contains(r.IdSuscripcion))
+                        .ToListAsync();
+
+                    if (renovacionesViejas.Any())
                     {
-                        var perfil = await _context.PerfilesCuentas.FindAsync(sus.IdPerfilCuenta.Value);
-                        if (perfil != null)
+                        _context.Renovaciones.RemoveRange(renovacionesViejas);
+                    }
+
+                    // Liberar perfiles asociados
+                    foreach (var sus in suscripcionesViejas)
+                    {
+                        if (sus.IdPerfilCuenta.HasValue)
                         {
-                            perfil.Ocupado = false;
-                            perfil.IdClienteAsignado = null;
-                            perfil.EstadoPerfil = "Disponible";
-                            _context.PerfilesCuentas.Update(perfil);
+                            var perfil = await _context.PerfilesCuentas.FindAsync(sus.IdPerfilCuenta.Value);
+                            if (perfil != null)
+                            {
+                                perfil.Ocupado = false;
+                                perfil.IdClienteAsignado = null;
+                                perfil.EstadoPerfil = "Disponible";
+                                _context.PerfilesCuentas.Update(perfil);
+                            }
                         }
                     }
+
+                    _context.Suscripciones.RemoveRange(suscripcionesViejas);
                 }
 
-                _context.Suscripciones.RemoveRange(suscripcionesViejas);
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
-                await _context.SaveChangesAsync(); // Se liberan perfiles en BD antes de re-asignar
+                await _context.SaveChangesAsync(); // Se persisten las eliminaciones y la liberación de perfiles en BD
 
                 // ==========================================
                 // 2. APLICACIÓN DE NUEVOS VALORES Y RE-ASIGNACIÓN
@@ -440,7 +457,6 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // Búsqueda de perfiles disponibles (incluyendo los que pertenecían a esta misma venta y acaban de liberarse)
                         var perfilesDisponibles = await _context.PerfilesCuentas
                             .Where(p => p.IdProducto == prod.Id && (!p.Ocupado || idsPerfilesPropios.Contains(p.Id)))
                             .Take(itemDto.Cantidad)
@@ -467,7 +483,7 @@ namespace NicaplusApi.Controllers
                             var nuevaSuscripcion = new Suscripcion
                             {
                                 IdCliente = idClienteFinal.Value,
-                                IdVenta = id, // 👈 Asignación de venta
+                                IdVenta = id,
                                 NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
                                 TipoSuscripcion = "Digital",
                                 IdProducto = prod.Id,
@@ -570,28 +586,42 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 2. Liberación de Perfiles y Eliminación Directa por IdVenta
+                // 2. Liberación de Perfiles, Eliminación de Renovaciones y Suscripciones asociadas
                 var suscripciones = await _context.Suscripciones
                     .Where(s => s.IdVenta == id)
                     .ToListAsync();
 
-                foreach (var sus in suscripciones)
-                {
-                    if (sus.IdPerfilCuenta.HasValue)
-                    {
-                        var perfil = await _context.PerfilesCuentas.FindAsync(sus.IdPerfilCuenta.Value);
-                        if (perfil != null)
-                        {
-                            perfil.Ocupado = false;
-                            perfil.IdClienteAsignado = null;
-                            perfil.EstadoPerfil = "Disponible";
-                            _context.PerfilesCuentas.Update(perfil);
-                        }
-                    }
-                }
-
                 if (suscripciones.Any())
                 {
+                    var idsSuscripciones = suscripciones.Select(s => s.Id).ToList();
+
+                    // 2.1 Eliminar previamente las renovaciones vinculadas a estas suscripciones
+                    var renovacionesAsociadas = await _context.Renovaciones
+                        .Where(r => idsSuscripciones.Contains(r.IdSuscripcion))
+                        .ToListAsync();
+
+                    if (renovacionesAsociadas.Any())
+                    {
+                        _context.Renovaciones.RemoveRange(renovacionesAsociadas);
+                    }
+
+                    // 2.2 Liberar perfiles asociados
+                    foreach (var sus in suscripciones)
+                    {
+                        if (sus.IdPerfilCuenta.HasValue)
+                        {
+                            var perfil = await _context.PerfilesCuentas.FindAsync(sus.IdPerfilCuenta.Value);
+                            if (perfil != null)
+                            {
+                                perfil.Ocupado = false;
+                                perfil.IdClienteAsignado = null;
+                                perfil.EstadoPerfil = "Disponible";
+                                _context.PerfilesCuentas.Update(perfil);
+                            }
+                        }
+                    }
+
+                    // 2.3 Eliminar suscripciones
                     _context.Suscripciones.RemoveRange(suscripciones);
                 }
 
