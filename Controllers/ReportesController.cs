@@ -254,8 +254,9 @@ namespace NicaplusApi.Controllers
                     .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes && d.Venta.FechaVenta < mañana)
                     .SumAsync(d => (decimal?)((d.Producto != null ? d.Producto.PrecioCosto : 0m) * d.Cantidad)) ?? 0m;
 
+                // CORRECCIÓN EN GetResumenDashboard:
                 var gastosOperativosMes = await _context.MovimientosCaja
-                    .Where(m => m.Fecha >= inicioMes && m.Fecha < mañana && (m.Tipo == "Egreso" || m.Concepto == "Gasto Ordinario" || m.Concepto == "Ajuste"))
+                    .Where(m => m.Fecha >= inicioMes && m.Fecha < mañana && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
                     .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
                 var utilidadNetaRealMes = totalVentaMes - costoMercanciaVendida - gastosOperativosMes;
