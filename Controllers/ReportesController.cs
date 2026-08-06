@@ -70,7 +70,7 @@ namespace NicaplusApi.Controllers
                     .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
                 var totalGastosFijos = await _context.MovimientosCaja
-                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && (m.Tipo == "Egreso" || m.Concepto == "Gasto Ordinario" || m.Concepto == "Ajuste"))
+                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
                     .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
                 var totalComprasProveedores = await _context.MovimientosCaja
