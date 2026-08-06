@@ -118,6 +118,46 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
+                // NUEVO: Consulta de Compras a Proveedores en el rango
+                var listaComprasProveedores = await _context.ComprasProveedores
+                    .AsNoTracking()
+                    .Include(c => c.Proveedor)
+                    .Include(c => c.Detalles!)
+                        .ThenInclude(d => d.Producto)
+                    .Where(c => c.FechaCompra >= fechaInicio && c.FechaCompra <= fechaFin)
+                    .OrderByDescending(c => c.FechaCompra)
+                    .Select(c => new
+                    {
+                        c.Id,
+                        Proveedor = c.Proveedor != null ? c.Proveedor.RazonSocial : "Proveedor General",
+                        Fecha = c.FechaCompra.ToString("yyyy-MM-dd HH:mm"),
+                        c.TotalCompra,
+                        c.Observaciones,
+                        Items = c.Detalles.Select(d => new
+                        {
+                            Producto = d.Producto != null ? d.Producto.Nombre : "Producto General",
+                            d.Cantidad,
+                            d.CostoUnitario
+                        }).ToList()
+                    })
+                    .ToListAsync();
+
+                // NUEVO: Consulta de Movimientos de Libro Diario / Arqueo de Caja
+                var listaMovimientosCaja = await _context.MovimientosCaja
+                    .AsNoTracking()
+                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin)
+                    .OrderByDescending(m => m.Fecha)
+                    .Select(m => new
+                    {
+                        m.Id,
+                        m.Tipo,
+                        m.Concepto,
+                        m.Monto,
+                        m.Detalle,
+                        Fecha = m.Fecha.ToString("yyyy-MM-dd HH:mm")
+                    })
+                    .ToListAsync();
+
                 var resultado = new
                 {
                     Rango = $"{fechaInicio:dd/MM/yyyy} al {hasta.Date:dd/MM/yyyy}",
@@ -136,7 +176,9 @@ namespace NicaplusApi.Controllers
                         BalanceCajaReal = balanceNetoEfectivoCaja
                     },
                     TopProductos = topProductos,
-                    Transacciones = listaTransacciones
+                    Transacciones = listaTransacciones,
+                    ComprasProveedores = listaComprasProveedores, // 👈 Enviado al PDF
+                    MovimientosCaja = listaMovimientosCaja       // 👈 Enviado al PDF
                 };
 
                 return Ok(resultado);
