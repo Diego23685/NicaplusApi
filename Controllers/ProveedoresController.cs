@@ -345,6 +345,107 @@ namespace NicaplusApi.Controllers
             }
         }
 
+        // PUT: api/Proveedores/compras/5 (Edición Reversiva de Compra)
+        [HttpPut("compras/{id}")]
+        public async Task<IActionResult> EditarCompra(int id, [FromBody] RegistrarCompraProveedorDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(new { mensaje = "Datos inválidos.", detalles = ModelState });
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                var compraOriginal = await _context.ComprasProveedores
+                    .Include(c => c.Detalles)
+                    .FirstOrDefaultAsync(c => c.Id == id);
+
+                if (compraOriginal == null)
+                    return NotFound(new { mensaje = "La orden de compra no existe." });
+
+                var proveedor = await _context.Proveedores.FindAsync(dto.IdProveedor);
+                if (proveedor == null)
+                    return BadRequest(new { mensaje = "El proveedor especificado no existe." });
+
+                // 1. Revertir el stock de la compra anterior
+                foreach (var detalleOrig in compraOriginal.Detalles)
+                {
+                    var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
+                    if (prod != null && prod.ControlaStock && !prod.EsDigital)
+                    {
+                        prod.StockActual -= detalleOrig.Cantidad;
+                        if (prod.StockActual <= 0)
+                        {
+                            prod.StockActual = 0;
+                            prod.Estado = "Agotado";
+                        }
+                    }
+                }
+
+                // Limpiar detalles anteriores
+                _context.DetallesComprasProveedores.RemoveRange(compraOriginal.Detalles);
+                await _context.SaveChangesAsync();
+
+                // 2. Aplicar los nuevos datos
+                compraOriginal.IdProveedor = dto.IdProveedor;
+                compraOriginal.TotalCompra = dto.TotalCompra;
+                compraOriginal.Detalles = new List<DetalleCompraProveedor>();
+
+                foreach (var item in dto.Detalles)
+                {
+                    var producto = await _context.Productos.FindAsync(item.IdProducto);
+                    if (producto == null)
+                    {
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { mensaje = $"El producto con ID {item.IdProducto} no existe." });
+                    }
+
+                    if (producto.ControlaStock && !producto.EsDigital)
+                    {
+                        producto.StockActual += item.Cantidad;
+                        if (producto.Estado == "Agotado" && producto.StockActual > 0) 
+                            producto.Estado = "Activo";
+                    }
+
+                    producto.PrecioCosto = item.CostoUnitario;
+                    producto.GarantiaDias = item.GarantiaDiasPactada;
+                    producto.Proveedor = proveedor.RazonSocial;
+
+                    if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
+                    {
+                        producto.PrecioVenta = item.NuevoPrecioVenta.Value;
+                    }
+
+                    compraOriginal.Detalles.Add(new DetalleCompraProveedor
+                    {
+                        IdProducto = item.IdProducto,
+                        Cantidad = item.Cantidad,
+                        CostoUnitario = item.CostoUnitario,
+                        GarantiaDiasPactada = item.GarantiaDiasPactada
+                    });
+                }
+
+                // 3. Sincronizar el egreso de Caja asociado
+                var egresoCaja = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdCompraProveedor == id);
+                if (egresoCaja != null)
+                {
+                    egresoCaja.Monto = dto.TotalCompra;
+                    egresoCaja.Detalle = $"Adquisición (Editada) a proveedor: {proveedor.RazonSocial} (ID: {proveedor.Id})";
+                    _context.MovimientosCaja.Update(egresoCaja);
+                }
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { mensaje = $"Orden de compra #{id} actualizada exitosamente. Inventario y egreso en caja recalculados." });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "Error al editar la compra #{Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al actualizar la compra." });
+            }
+        }
+
         // NUEVO: DELETE: api/Proveedores/compras/5 (Anulación / Reversión de Compra)
         [HttpDelete("compras/{id}")]
         public async Task<IActionResult> AnularCompra(int id)
