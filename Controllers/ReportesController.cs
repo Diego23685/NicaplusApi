@@ -79,11 +79,8 @@ namespace NicaplusApi.Controllers
                     queryVentas = queryVentas.Where(v => v.IdCliente == idCliente.Value);
                     queryDetalles = queryDetalles.Where(d => d.Venta!.IdCliente == idCliente.Value);
                     
-                    // Los movimientos de caja se restringen a las ventas de este cliente
                     var ventasClienteIds = await queryVentas.Select(v => v.Id).Distinct().ToListAsync();
                     queryMovimientos = queryMovimientos.Where(m => m.IdVenta.HasValue && ventasClienteIds.Contains(m.IdVenta.Value));
-                    
-                    // Las compras a proveedores no aplican a un cliente individual
                     queryCompras = queryCompras.Where(c => false);
                 }
 
@@ -108,13 +105,11 @@ namespace NicaplusApi.Controllers
                             break;
                     }
 
-                    // Sincronizar Ventas y Movimientos de Caja con los ítems del rubro
                     var ventasValidasIds = await queryDetalles.Select(d => d.IdVenta).Distinct().ToListAsync();
                     queryVentas = queryVentas.Where(v => ventasValidasIds.Contains(v.Id));
 
                     var comprasValidasIds = await queryCompras.Select(c => c.Id).Distinct().ToListAsync();
                     
-                    // Filtra los movimientos de caja para mostrar SOLO lo que pertenece al rubro
                     queryMovimientos = queryMovimientos.Where(m => 
                         (m.IdVenta.HasValue && ventasValidasIds.Contains(m.IdVenta.Value)) ||
                         (m.IdCompraProveedor.HasValue && comprasValidasIds.Contains(m.IdCompraProveedor.Value))
@@ -194,20 +189,27 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
-                var listaMovimientosCaja = await queryMovimientos
+                // 🟢 MAPEO REVISADO PARA UNIFICAR LA ETIQUETA DE REFERENCIA OPERATIVA
+                var listaMovimientosCajaRaw = await queryMovimientos
                     .OrderByDescending(m => m.Fecha)
-                    .Select(m => new
-                    {
-                        m.Id,
-                        m.Tipo,
-                        m.Concepto,
-                        m.Monto,
-                        m.Detalle,
-                        m.IdVenta,
-                        m.IdCompraProveedor,
-                        Fecha = m.Fecha.ToString("yyyy-MM-dd HH:mm")
-                    })
                     .ToListAsync();
+
+                var listaMovimientosCaja = listaMovimientosCajaRaw.Select(m => new
+                {
+                    // Se muestra el identificador comercial correspondiente en lugar del ID interno
+                    Id = m.IdVenta.HasValue 
+                        ? $"Factura #000{m.IdVenta.Value}" 
+                        : (m.IdCompraProveedor.HasValue 
+                            ? $"Orden #{m.IdCompraProveedor.Value}" 
+                            : $"Gasto #{m.Id}"),
+                    m.Tipo,
+                    m.Concepto,
+                    m.Monto,
+                    m.Detalle,
+                    m.IdVenta,
+                    m.IdCompraProveedor,
+                    Fecha = m.Fecha.ToString("yyyy-MM-dd HH:mm")
+                }).ToList();
 
                 var resultado = new
                 {
@@ -257,7 +259,6 @@ namespace NicaplusApi.Controllers
                 var finSemana = inicioSemana.AddDays(7);
                 var mañana = hoy.AddDays(1);
 
-                // Agregaciones de ventas calculadas directamente por la Base de Datos
                 var totalVentaDia = await _context.Ventas
                     .Where(v => v.FechaVenta >= hoy && v.FechaVenta < mañana)
                     .SumAsync(v => (decimal?)v.Total) ?? 0m;
@@ -270,7 +271,6 @@ namespace NicaplusApi.Controllers
                     .Where(v => v.FechaVenta >= inicioMes && v.FechaVenta < mañana)
                     .SumAsync(v => (decimal?)v.Total) ?? 0m;
 
-                // Construcción de Flujo Semanal
                 var ventasSemanaRaw = await _context.Ventas
                     .AsNoTracking()
                     .Where(v => v.FechaVenta >= inicioSemana && v.FechaVenta < finSemana)
@@ -284,7 +284,6 @@ namespace NicaplusApi.Controllers
                     ingresosSemana[indiceDia] += venta.Total;
                 }
 
-                // Desglose por Rubros
                 var totalDigitales = await _context.DetallesVentas
                     .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes && d.Venta.FechaVenta < mañana && d.Producto != null && d.Producto.EsDigital)
                     .SumAsync(d => (decimal?)d.SubTotal) ?? 0m;
@@ -301,14 +300,12 @@ namespace NicaplusApi.Controllers
                     .Where(d => d.Venta != null && d.Venta.FechaVenta >= inicioMes && d.Venta.FechaVenta < mañana)
                     .SumAsync(d => (decimal?)((d.Producto != null ? d.Producto.PrecioCosto : 0m) * d.Cantidad)) ?? 0m;
 
-                // CORRECCIÓN EN GetResumenDashboard:
                 var gastosOperativosMes = await _context.MovimientosCaja
                     .Where(m => m.Fecha >= inicioMes && m.Fecha < mañana && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
                     .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
                 var utilidadNetaRealMes = totalVentaMes - costoMercanciaVendida - gastosOperativosMes;
 
-                // Contadores y métricas operativas
                 var ticketsAbiertos = await _context.OrdenesServicio
                     .CountAsync(o => o.Estado != "Entregado" && o.Estado != "Cancelado");
 
