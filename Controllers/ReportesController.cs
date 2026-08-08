@@ -41,60 +41,98 @@ namespace NicaplusApi.Controllers
         // 1. GET: api/Reportes/personalizado
         [Authorize(Roles = "Administrador,Socio")]
         [HttpGet("personalizado")]
-        public async Task<IActionResult> GetReportePersonalizado([FromQuery] DateTime desde, [FromQuery] DateTime hasta)
+        public async Task<IActionResult> GetReportePersonalizado(
+            [FromQuery] DateTime desde, 
+            [FromQuery] DateTime hasta,
+            [FromQuery] int? idCliente = null,
+            [FromQuery] string? rubro = null)
         {
             try
             {
                 var fechaInicio = desde.Date;
                 var fechaFin = hasta.Date.AddDays(1).AddTicks(-1);
 
-                // Ejecución optimizada en Servidor de BD
-                var totalVentasCount = await _context.Ventas
-                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin)
-                    .CountAsync();
+                // Base Query de Ventas filtrada por Rango y Cliente opcional
+                var queryVentas = _context.Ventas
+                    .AsNoTracking()
+                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin);
 
-                var totalEfectivo = await _context.Ventas
-                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin && v.MetodoPago == "Efectivo")
-                    .SumAsync(v => (decimal?)v.Total) ?? 0m;
+                if (idCliente.HasValue && idCliente.Value > 0)
+                {
+                    queryVentas = queryVentas.Where(v => v.IdCliente == idCliente.Value);
+                }
 
-                var totalTransferencia = await _context.Ventas
-                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin && v.MetodoPago == "Transferencia")
-                    .SumAsync(v => (decimal?)v.Total) ?? 0m;
+                // Base Query de Detalles de Ventas filtrada por Rango, Cliente y Rubro opcional
+                var queryDetalles = _context.DetallesVentas
+                    .AsNoTracking()
+                    .Include(d => d.Producto)
+                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= fechaInicio && d.Venta.FechaVenta <= fechaFin);
 
-                var totalTarjeta = await _context.Ventas
-                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin && v.MetodoPago == "Tarjeta")
-                    .SumAsync(v => (decimal?)v.Total) ?? 0m;
+                if (idCliente.HasValue && idCliente.Value > 0)
+                {
+                    queryDetalles = queryDetalles.Where(d => d.Venta!.IdCliente == idCliente.Value);
+                }
 
-                var totalIngresosExtra = await _context.MovimientosCaja
-                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Ingreso" && m.Concepto != "Venta" && m.Concepto != "Renovacion")
-                    .SumAsync(m => (decimal?)m.Monto) ?? 0m;
+                // Aplicar Filtro de Rubro sobre los Detalles
+                if (!string.IsNullOrEmpty(rubro) && rubro != "Todos")
+                {
+                    switch (rubro.ToLower())
+                    {
+                        case "videojuegos":
+                            queryDetalles = queryDetalles.Where(d => d.Producto != null && d.Producto.JuegoId != null);
+                            break;
+                        case "streaming":
+                            queryDetalles = queryDetalles.Where(d => d.Producto != null && (d.Producto.EsSuscripcion || d.Producto.EsDigital) && d.Producto.JuegoId == null);
+                            break;
+                        case "tienda":
+                            queryDetalles = queryDetalles.Where(d => d.Producto != null && !d.Producto.EsSuscripcion && !d.Producto.EsDigital && d.Producto.JuegoId == null);
+                            break;
+                    }
 
-                var totalGastosFijos = await _context.MovimientosCaja
-                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
-                    .SumAsync(m => (decimal?)m.Monto) ?? 0m;
+                    // Si se filtra por rubro, restringimos la lista de IDs de venta para los totales financieros
+                    var ventasValidasIds = await queryDetalles.Select(d => d.IdVenta).Distinct().ToListAsync();
+                    queryVentas = queryVentas.Where(v => ventasValidasIds.Contains(v.Id));
+                }
 
-                var totalCredito = await _context.Ventas
-                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin && v.MetodoPago == "Crédito")
-                    .SumAsync(v => (decimal?)v.Total) ?? 0m;
+                // --- CÁLCULO DE FINANZAS APLICANDO FILTROS ---
+                var totalVentasCount = await queryVentas.CountAsync();
 
-                var totalComprasProveedores = await _context.MovimientosCaja
-                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Concepto == "Compra Proveedor")
-                    .SumAsync(m => (decimal?)m.Monto) ?? 0m;
+                var totalEfectivo = await queryVentas.Where(v => v.MetodoPago == "Efectivo").SumAsync(v => (decimal?)v.Total) ?? 0m;
+                var totalTransferencia = await queryVentas.Where(v => v.MetodoPago == "Transferencia").SumAsync(v => (decimal?)v.Total) ?? 0m;
+                var totalTarjeta = await queryVentas.Where(v => v.MetodoPago == "Tarjeta").SumAsync(v => (decimal?)v.Total) ?? 0m;
+                var totalCredito = await queryVentas.Where(v => v.MetodoPago == "Crédito").SumAsync(v => (decimal?)v.Total) ?? 0m;
+
+                // Movimientos de Caja generales solo se incluyen si no hay filtro de cliente ni de rubro específico
+                var totalIngresosExtra = 0m;
+                var totalGastosFijos = 0m;
+                var totalComprasProveedores = 0m;
+
+                if ((!idCliente.HasValue || idCliente == 0) && (string.IsNullOrEmpty(rubro) || rubro == "Todos"))
+                {
+                    totalIngresosExtra = await _context.MovimientosCaja
+                        .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Ingreso" && m.Concepto != "Venta" && m.Concepto != "Renovacion")
+                        .SumAsync(m => (decimal?)m.Monto) ?? 0m;
+
+                    totalGastosFijos = await _context.MovimientosCaja
+                        .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
+                        .SumAsync(m => (decimal?)m.Monto) ?? 0m;
+
+                    totalComprasProveedores = await _context.MovimientosCaja
+                        .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Concepto == "Compra Proveedor")
+                        .SumAsync(m => (decimal?)m.Monto) ?? 0m;
+                }
 
                 var granTotalFacturado = totalEfectivo + totalTransferencia + totalTarjeta;
                 var balanceNetoEfectivoCaja = (granTotalFacturado + totalIngresosExtra) - (totalGastosFijos + totalComprasProveedores);
 
-                // --- CÁLCULO DE COSTO Y UTILIDAD DEL PERÍODO ---
-                var costoMercanciaVendida = await _context.DetallesVentas
-                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= fechaInicio && d.Venta.FechaVenta <= fechaFin)
+                // --- COSTOS Y UTILIDAD ---
+                var costoMercanciaVendida = await queryDetalles
                     .SumAsync(d => (decimal?)((d.Producto != null ? d.Producto.PrecioCosto : 0m) * d.Cantidad)) ?? 0m;
 
                 var utilidadBruta = granTotalFacturado - costoMercanciaVendida;
                 var utilidadNetaReal = utilidadBruta - totalGastosFijos;
 
-                var topProductos = await _context.DetallesVentas
-                    .AsNoTracking()
-                    .Where(d => d.Venta != null && d.Venta.FechaVenta >= fechaInicio && d.Venta.FechaVenta <= fechaFin)
+                var topProductos = await queryDetalles
                     .GroupBy(d => new { d.IdProducto, Nombre = d.Producto != null ? d.Producto.Nombre : "Servicio/Producto General" })
                     .Select(g => new TopProductoDto
                     {
@@ -103,12 +141,10 @@ namespace NicaplusApi.Controllers
                         Subtotal = g.Sum(d => d.SubTotal)
                     })
                     .OrderByDescending(x => x.Cantidad)
-                    .Take(5)
+                    .Take(10)
                     .ToListAsync();
 
-                var listaTransacciones = await _context.Ventas
-                    .AsNoTracking()
-                    .Where(v => v.FechaVenta >= fechaInicio && v.FechaVenta <= fechaFin)
+                var listaTransacciones = await queryVentas
                     .OrderByDescending(v => v.FechaVenta)
                     .Select(v => new TransaccionResumenDto
                     {
@@ -119,46 +155,6 @@ namespace NicaplusApi.Controllers
                         Operador = v.Usuario != null ? v.Usuario.Nombre : "Sistema",
                         MetodoPago = v.MetodoPago,
                         Total = v.Total
-                    })
-                    .ToListAsync();
-
-                // NUEVO: Consulta de Compras a Proveedores en el rango
-                var listaComprasProveedores = await _context.ComprasProveedores
-                    .AsNoTracking()
-                    .Include(c => c.Proveedor)
-                    .Include(c => c.Detalles!)
-                        .ThenInclude(d => d.Producto)
-                    .Where(c => c.FechaCompra >= fechaInicio && c.FechaCompra <= fechaFin)
-                    .OrderByDescending(c => c.FechaCompra)
-                    .Select(c => new
-                    {
-                        c.Id,
-                        Proveedor = c.Proveedor != null ? c.Proveedor.RazonSocial : "Proveedor General",
-                        Fecha = c.FechaCompra.ToString("yyyy-MM-dd HH:mm"),
-                        c.TotalCompra,
-                        c.Observaciones,
-                        Items = c.Detalles.Select(d => new
-                        {
-                            Producto = d.Producto != null ? d.Producto.Nombre : "Producto General",
-                            d.Cantidad,
-                            d.CostoUnitario
-                        }).ToList()
-                    })
-                    .ToListAsync();
-
-                // NUEVO: Consulta de Movimientos de Libro Diario / Arqueo de Caja
-                var listaMovimientosCaja = await _context.MovimientosCaja
-                    .AsNoTracking()
-                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin)
-                    .OrderByDescending(m => m.Fecha)
-                    .Select(m => new
-                    {
-                        m.Id,
-                        m.Tipo,
-                        m.Concepto,
-                        m.Monto,
-                        m.Detalle,
-                        Fecha = m.Fecha.ToString("yyyy-MM-dd HH:mm")
                     })
                     .ToListAsync();
 
@@ -181,9 +177,7 @@ namespace NicaplusApi.Controllers
                         BalanceCajaReal = balanceNetoEfectivoCaja
                     },
                     TopProductos = topProductos,
-                    Transacciones = listaTransacciones,
-                    ComprasProveedores = listaComprasProveedores, // 👈 Enviado al PDF
-                    MovimientosCaja = listaMovimientosCaja       // 👈 Enviado al PDF
+                    Transacciones = listaTransacciones
                 };
 
                 return Ok(resultado);
