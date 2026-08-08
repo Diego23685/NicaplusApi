@@ -89,7 +89,6 @@ namespace NicaplusApi.Controllers
                             break;
                     }
 
-                    // Si se filtra por rubro, restringimos la lista de IDs de venta para los totales financieros
                     var ventasValidasIds = await queryDetalles.Select(d => d.IdVenta).Distinct().ToListAsync();
                     queryVentas = queryVentas.Where(v => ventasValidasIds.Contains(v.Id));
                 }
@@ -102,25 +101,18 @@ namespace NicaplusApi.Controllers
                 var totalTarjeta = await queryVentas.Where(v => v.MetodoPago == "Tarjeta").SumAsync(v => (decimal?)v.Total) ?? 0m;
                 var totalCredito = await queryVentas.Where(v => v.MetodoPago == "Crédito").SumAsync(v => (decimal?)v.Total) ?? 0m;
 
-                // Movimientos de Caja generales solo se incluyen si no hay filtro de cliente ni de rubro específico
-                var totalIngresosExtra = 0m;
-                var totalGastosFijos = 0m;
-                var totalComprasProveedores = 0m;
+                // Movimientos de Caja generales se consultan normalmente
+                var totalIngresosExtra = await _context.MovimientosCaja
+                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Ingreso" && m.Concepto != "Venta" && m.Concepto != "Renovacion")
+                    .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
-                if ((!idCliente.HasValue || idCliente == 0) && (string.IsNullOrEmpty(rubro) || rubro == "Todos"))
-                {
-                    totalIngresosExtra = await _context.MovimientosCaja
-                        .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Ingreso" && m.Concepto != "Venta" && m.Concepto != "Renovacion")
-                        .SumAsync(m => (decimal?)m.Monto) ?? 0m;
+                var totalGastosFijos = await _context.MovimientosCaja
+                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
+                    .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
-                    totalGastosFijos = await _context.MovimientosCaja
-                        .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Tipo == "Egreso" && m.Concepto != "Compra Proveedor")
-                        .SumAsync(m => (decimal?)m.Monto) ?? 0m;
-
-                    totalComprasProveedores = await _context.MovimientosCaja
-                        .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Concepto == "Compra Proveedor")
-                        .SumAsync(m => (decimal?)m.Monto) ?? 0m;
-                }
+                var totalComprasProveedores = await _context.MovimientosCaja
+                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin && m.Concepto == "Compra Proveedor")
+                    .SumAsync(m => (decimal?)m.Monto) ?? 0m;
 
                 var granTotalFacturado = totalEfectivo + totalTransferencia + totalTarjeta;
                 var balanceNetoEfectivoCaja = (granTotalFacturado + totalIngresosExtra) - (totalGastosFijos + totalComprasProveedores);
@@ -158,6 +150,51 @@ namespace NicaplusApi.Controllers
                     })
                     .ToListAsync();
 
+                // 🟢 AQUÍ ESTABA EL PROBLEMA: FALTABAN ESTAS DOS CONSULTAS
+
+                // 1. Consulta de Compras a Proveedores para la Pestaña "Compras Proveedores"
+                var listaComprasProveedores = await _context.ComprasProveedores
+                    .AsNoTracking()
+                    .Include(c => c.Proveedor)
+                    .Include(c => c.Detalles!)
+                        .ThenInclude(d => d.Producto)
+                    .Where(c => c.FechaCompra >= fechaInicio && c.FechaCompra <= fechaFin)
+                    .OrderByDescending(c => c.FechaCompra)
+                    .Select(c => new
+                    {
+                        c.Id,
+                        Proveedor = c.Proveedor != null ? c.Proveedor.RazonSocial : "Proveedor General",
+                        Fecha = c.FechaCompra.ToString("yyyy-MM-dd HH:mm"),
+                        c.TotalCompra,
+                        c.Observaciones,
+                        Items = c.Detalles.Select(d => new
+                        {
+                            Producto = d.Producto != null ? d.Producto.Nombre : "Producto General",
+                            d.Cantidad,
+                            d.CostoUnitario
+                        }).ToList()
+                    })
+                    .ToListAsync();
+
+                // 2. Consulta de Movimientos de Caja para la Pestaña "Libro Diario / Arqueo"
+                var listaMovimientosCaja = await _context.MovimientosCaja
+                    .AsNoTracking()
+                    .Where(m => m.Fecha >= fechaInicio && m.Fecha <= fechaFin)
+                    .OrderByDescending(m => m.Fecha)
+                    .Select(m => new
+                    {
+                        m.Id,
+                        m.Tipo,
+                        m.Concepto,
+                        m.Monto,
+                        m.Detalle,
+                        m.IdVenta,
+                        m.IdCompraProveedor,
+                        Fecha = m.Fecha.ToString("yyyy-MM-dd HH:mm")
+                    })
+                    .ToListAsync();
+
+                // 🟢 Y DEBÍAN RETORNARSE EN EL JSON FINAL:
                 var resultado = new
                 {
                     Rango = $"{fechaInicio:dd/MM/yyyy} al {hasta.Date:dd/MM/yyyy}",
@@ -177,7 +214,9 @@ namespace NicaplusApi.Controllers
                         BalanceCajaReal = balanceNetoEfectivoCaja
                     },
                     TopProductos = topProductos,
-                    Transacciones = listaTransacciones
+                    Transacciones = listaTransacciones,
+                    ComprasProveedores = listaComprasProveedores, // 👈 Enviado al frontend
+                    MovimientosCaja = listaMovimientosCaja        // 👈 Enviado al frontend
                 };
 
                 return Ok(resultado);
