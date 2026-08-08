@@ -595,20 +595,46 @@ namespace NicaplusApi.Controllers
                     .FirstOrDefaultAsync(v => v.Id == id);
 
                 if (venta == null)
-                    return NotFound(new { mensaje = "La venta no existe." });
+                    return NotFound(new { mensaje = "La venta especificada no existe." });
 
-                // 1. Devolución de Stock
+                // =========================================================
+                // 1. RESTAURACIÓN DE INVENTARIO (PRODUCTOS PLANOS Y VARIANTES)
+                // =========================================================
                 foreach (var detalle in venta.Detalles)
                 {
-                    var prod = await _context.Productos.FindAsync(detalle.IdProducto);
-                    if (prod != null && prod.ControlaStock)
+                    // 🟢 A) Si es una Variación de Producto: devolvemos stock a VariacionesProductos
+                    if (detalle.VariacionId.HasValue && detalle.VariacionId.Value > 0)
                     {
-                        prod.StockActual += detalle.Cantidad;
-                        if (prod.Estado == "Agotado" && prod.StockActual > 0) prod.Estado = "Activo";
+                        var variacion = await _context.VariacionesProductos.FindAsync(detalle.VariacionId.Value);
+                        if (variacion != null)
+                        {
+                            variacion.StockActual += detalle.Cantidad;
+                            if (variacion.Estado == "Agotado" && variacion.StockActual > 0)
+                            {
+                                variacion.Estado = "Activo";
+                            }
+                            _context.VariacionesProductos.Update(variacion);
+                        }
+                    }
+                    // 🟢 B) Si es un Producto Plano sin variantes: devolvemos stock a Productos
+                    else
+                    {
+                        var prod = await _context.Productos.FindAsync(detalle.IdProducto);
+                        if (prod != null && prod.ControlaStock)
+                        {
+                            prod.StockActual += detalle.Cantidad;
+                            if (prod.Estado == "Agotado" && prod.StockActual > 0)
+                            {
+                                prod.Estado = "Activo";
+                            }
+                            _context.Productos.Update(prod);
+                        }
                     }
                 }
 
-                // 2. Liberación de Perfiles, Eliminación de Renovaciones y Suscripciones asociadas
+                // =========================================================
+                // 2. LIBERACIÓN DE PERFILES Y ELIMINACIÓN DE SUSCRIPCIONES
+                // =========================================================
                 var suscripciones = await _context.Suscripciones
                     .Where(s => s.IdVenta == id)
                     .ToListAsync();
@@ -617,7 +643,7 @@ namespace NicaplusApi.Controllers
                 {
                     var idsSuscripciones = suscripciones.Select(s => s.Id).ToList();
 
-                    // 2.1 Eliminar previamente las renovaciones vinculadas a estas suscripciones
+                    // Limpieza en cascada de renovaciones vinculadas
                     var renovacionesAsociadas = await _context.Renovaciones
                         .Where(r => idsSuscripciones.Contains(r.IdSuscripcion))
                         .ToListAsync();
@@ -627,7 +653,7 @@ namespace NicaplusApi.Controllers
                         _context.Renovaciones.RemoveRange(renovacionesAsociadas);
                     }
 
-                    // 2.2 Liberar perfiles asociados
+                    // Liberación de perfiles de streaming
                     foreach (var sus in suscripciones)
                     {
                         if (sus.IdPerfilCuenta.HasValue)
@@ -643,15 +669,16 @@ namespace NicaplusApi.Controllers
                         }
                     }
 
-                    // 2.3 Eliminar suscripciones
                     _context.Suscripciones.RemoveRange(suscripciones);
                 }
 
-                // 3. Limpieza de Movimientos de Caja y Cuentas por Cobrar
-                var movimiento = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
-                if (movimiento != null)
+                // =========================================================
+                // 3. LIMPIEZA CONTABLE (ARQUEO DE CAJA Y CUENTAS POR COBRAR)
+                // =========================================================
+                var movimientoCaja = await _context.MovimientosCaja.FirstOrDefaultAsync(m => m.IdVenta == id);
+                if (movimientoCaja != null)
                 {
-                    _context.MovimientosCaja.Remove(movimiento);
+                    _context.MovimientosCaja.Remove(movimientoCaja);
                 }
 
                 var cpc = await _context.CuentasPorCobrar.FirstOrDefaultAsync(c => c.IdVenta == id);
@@ -660,19 +687,22 @@ namespace NicaplusApi.Controllers
                     _context.CuentasPorCobrar.Remove(cpc);
                 }
 
+                // =========================================================
+                // 4. ELIMINACIÓN DE DETALLES Y FACTURA
+                // =========================================================
                 _context.DetallesVentas.RemoveRange(venta.Detalles);
                 _context.Ventas.Remove(venta);
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                return Ok(new { mensaje = $"Venta #{id} eliminada y sus efectos contables/inventario revertidos." });
+                return Ok(new { mensaje = $"Factura #{id} eliminada e inventarios/cuentas revertidos con éxito." });
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                _logger.LogError(ex, "Error al eliminar la venta #{Id}", id);
-                return StatusCode(500, new { mensaje = "Error interno al cancelar y eliminar la venta." });
+                _logger.LogError(ex, "Error al intentar eliminar la venta #{Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al cancelar y eliminar la factura." });
             }
         }
     }
