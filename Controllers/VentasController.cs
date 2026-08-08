@@ -199,19 +199,41 @@ namespace NicaplusApi.Controllers
                     if (prod == null)
                         return BadRequest(new { mensaje = $"El producto con ID {itemDto.IdProducto} no existe." });
 
-                    if (prod.ControlaStock)
+                    VariacionProducto? variacionElegida = null;
+
+                    // 🟢 1. MANEJO Y VALIDACIÓN DE STOCK PARA VARIACIONES
+                    if (itemDto.IdVariacion.HasValue && itemDto.IdVariacion.Value > 0)
+                    {
+                        variacionElegida = await _context.VariacionesProductos.FindAsync(itemDto.IdVariacion.Value);
+                        if (variacionElegida == null)
+                            return BadRequest(new { mensaje = $"La variación elegida no existe en el catálogo." });
+
+                        if (variacionElegida.StockActual < itemDto.Cantidad)
+                        {
+                            return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre} ({variacionElegida.NombreVariacion}). Disponible: {variacionElegida.StockActual}" });
+                        }
+
+                        // Descuento directo de stock en la variación
+                        variacionElegida.StockActual -= itemDto.Cantidad;
+                        if (variacionElegida.StockActual <= 0) variacionElegida.Estado = "Agotado";
+                        _context.VariacionesProductos.Update(variacionElegida);
+                    }
+                    // 🟢 2. MANEJO Y VALIDACIÓN DE STOCK PARA PRODUCTOS NORMALES
+                    else if (prod.ControlaStock && !prod.EsDigital && !prod.RequiereServicio)
                     {
                         if (prod.StockActual < itemDto.Cantidad)
                             return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre}. Disponible: {prod.StockActual}" });
 
                         prod.StockActual -= itemDto.Cantidad;
                         if (prod.StockActual <= 0) prod.Estado = "Agotado";
+                        _context.Productos.Update(prod);
                     }
 
                     var detalleVenta = new DetalleVenta
                     {
                         IdVenta = nuevaVenta.Id,
                         IdProducto = prod.Id,
+                        VariacionId = itemDto.IdVariacion, // 👈 Guarda la variación en el detalle de la factura
                         Cantidad = itemDto.Cantidad,
                         PrecioUnitario = itemDto.PrecioUnitario,
                         Descuento = itemDto.Descuento,

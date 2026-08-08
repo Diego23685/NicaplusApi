@@ -23,6 +23,7 @@ namespace NicaplusApi.DTOs
     {
         [Required]
         public int IdProducto { get; set; }
+        public int? IdVariacion { get; set; }
 
         [Range(1, 1000, ErrorMessage = "La cantidad debe ser mayor a 0.")]
         public int Cantidad { get; set; }
