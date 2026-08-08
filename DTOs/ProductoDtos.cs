@@ -35,12 +35,15 @@ namespace NicaplusApi.DTOs
 
         public int? CategoriaId { get; set; }
         public int? JuegoId { get; set; }
+        public bool TieneVariaciones { get; set; } = false;
+        public List<VariacionProductoDto> Variaciones { get; set; } = new List<VariacionProductoDto>();
     }
 
     public class ActualizarProductoDto : CrearProductoDto
     {
         [Required(ErrorMessage = "El ID del producto es obligatorio.")]
         public int Id { get; set; }
+        // Se eliminaron 'TieneVariaciones' y 'Variaciones' duplicadas de la herencia
     }
 
     public class ProductoCatalogoResponseDto
@@ -58,6 +61,8 @@ namespace NicaplusApi.DTOs
         public bool VisibleEnCatalogo { get; set; }
         public string? CategoriaNombre { get; set; }
         public string? JuegoNombre { get; set; }
+        public bool TieneVariaciones { get; set; } = false;
+        public List<VariacionProductoDto> Variaciones { get; set; } = new List<VariacionProductoDto>();
     }
 
     public class ProductoAdminResponseDto : ProductoCatalogoResponseDto
@@ -72,5 +77,24 @@ namespace NicaplusApi.DTOs
         public int? CategoriaId { get; set; }
         public int? JuegoId { get; set; }
         public int? PrimerPerfilId { get; set; }
+        // Se eliminaron 'TieneVariaciones' y 'Variaciones' duplicadas de la herencia
+    }
+
+    public class VariacionProductoDto
+    {
+        public int Id { get; set; }
+        public int ProductoPadreId { get; set; }
+        public string SKU { get; set; } = string.Empty;
+        public string Color { get; set; } = string.Empty;
+        public string Almacenamiento { get; set; } = string.Empty;
+        public string RAM { get; set; } = string.Empty;
+        public string Talla { get; set; } = string.Empty;
+        public string NombreVariacion { get; set; } = string.Empty;
+        public decimal PrecioVenta { get; set; }
+        public decimal PrecioCosto { get; set; }
+        public int StockActual { get; set; }
+        public int StockMinimo { get; set; }
+        public string ImagenUrl { get; set; } = string.Empty;
+        public string Estado { get; set; } = "Activo";
     }
 }

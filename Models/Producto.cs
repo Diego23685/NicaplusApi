@@ -1,4 +1,3 @@
-// Models/Producto.cs
 using System.ComponentModel.DataAnnotations;
 
 namespace NicaplusApi.Models
@@ -17,8 +16,7 @@ namespace NicaplusApi.Models
         public string ImagenUrl { get; set; } = string.Empty;
         public bool EsDigital { get; set; }
         
-        // --- CONTROL DE INVENTARIO PARA INTANGIBLES ---
-        public bool ControlaStock { get; set; } = true; // Por defecto es true
+        public bool ControlaStock { get; set; } = true;
 
         public bool RequiereServicio { get; set; }
         public bool VisibleEnCatalogo { get; set; }
@@ -33,5 +31,9 @@ namespace NicaplusApi.Models
         public Categoria? Categoria { get; set; }
         public int? JuegoId { get; set; }
         public Juego? Juego { get; set; }
+
+        // --- NUEVO: SOPORTE DE VARIACIONES ---
+        public bool TieneVariaciones { get; set; } = false;
+        public ICollection<VariacionProducto> Variaciones { get; set; } = new List<VariacionProducto>();
     }
 }

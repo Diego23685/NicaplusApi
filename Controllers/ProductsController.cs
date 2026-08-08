@@ -22,7 +22,7 @@ namespace NicaplusApi.Controllers
             _logger = logger;
         }
 
-        // 1. GET: api/Products (Panel de Administración y Caja POS)
+        // 1. GET: api/Products (Panel de Administración y Caja POS con Variaciones)
         [HttpGet]
         [Authorize]
         public async Task<IActionResult> GetProductos()
@@ -33,6 +33,7 @@ namespace NicaplusApi.Controllers
                     .AsNoTracking()
                     .Include(p => p.Categoria)
                     .Include(p => p.Juego)
+                    .Include(p => p.Variaciones) // Carga de la relación uno a muchos
                     .OrderByDescending(p => p.Id)
                     .Select(p => new ProductoAdminResponseDto
                     {
@@ -58,7 +59,26 @@ namespace NicaplusApi.Controllers
                         JuegoId = p.JuegoId,
                         JuegoNombre = p.Juego != null ? p.Juego.Nombre : null,
 
-                        // 👈 Obtenemos el ID de la primera credencial
+                        // Soporte para variaciones en la respuesta JSON
+                        TieneVariaciones = p.TieneVariaciones,
+                        Variaciones = p.Variaciones.Select(v => new VariacionProductoDto
+                        {
+                            Id = v.Id,
+                            ProductoPadreId = v.ProductoPadreId,
+                            SKU = v.SKU,
+                            Color = v.Color,
+                            Almacenamiento = v.Almacenamiento,
+                            RAM = v.RAM,
+                            Talla = v.Talla,
+                            NombreVariacion = v.NombreVariacion,
+                            PrecioVenta = v.PrecioVenta,
+                            PrecioCosto = v.PrecioCosto,
+                            StockActual = v.StockActual,
+                            StockMinimo = v.StockMinimo,
+                            ImagenUrl = v.ImagenUrl,
+                            Estado = v.Estado
+                        }).ToList(),
+
                         PrimerPerfilId = p.EsDigital
                             ? _context.PerfilesCuentas
                                 .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
@@ -67,7 +87,6 @@ namespace NicaplusApi.Controllers
                                 .FirstOrDefault()
                             : null,
 
-                        // 👈 Obtenemos el texto formateado de la primera credencial
                         MetadataDigital = p.EsDigital 
                             ? _context.PerfilesCuentas
                                 .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
@@ -146,6 +165,7 @@ namespace NicaplusApi.Controllers
                     .AsNoTracking()
                     .Include(p => p.Categoria)
                     .Include(p => p.Juego)
+                    .Include(p => p.Variaciones)
                     .Where(p => p.VisibleEnCatalogo && p.Estado == "Activo")
                     .OrderBy(p => p.Nombre)
                     .ToListAsync();
@@ -163,9 +183,12 @@ namespace NicaplusApi.Controllers
                     VisibleEnCatalogo = p.VisibleEnCatalogo,
                     CategoriaNombre = p.Categoria?.Nombre,
                     JuegoNombre = p.Juego?.Nombre,
-                    StockActual = p.EsSuscripcion
-                        ? (stockPerfilesPool.TryGetValue(p.Id, out int stockCalculado) ? stockCalculado : 0)
-                        : p.StockActual
+                    TieneVariaciones = p.TieneVariaciones,
+                    StockActual = p.TieneVariaciones
+                        ? p.Variaciones.Sum(v => v.StockActual)
+                        : (p.EsSuscripcion 
+                            ? (stockPerfilesPool.TryGetValue(p.Id, out int stockCalculado) ? stockCalculado : 0)
+                            : p.StockActual)
                 }).ToList();
 
                 return Ok(catalogo);
@@ -186,16 +209,19 @@ namespace NicaplusApi.Controllers
             {
                 var alertas = await _context.Productos
                     .AsNoTracking()
-                    .Where(p => p.ControlaStock && !p.EsDigital && !p.RequiereServicio && p.StockActual <= p.StockMinimo)
+                    .Include(p => p.Variaciones)
+                    .Where(p => p.ControlaStock && !p.EsDigital && !p.RequiereServicio && 
+                           (p.TieneVariaciones ? p.Variaciones.Any(v => v.StockActual <= v.StockMinimo) : p.StockActual <= p.StockMinimo))
                     .OrderBy(p => p.StockActual)
                     .Select(p => new ProductoAdminResponseDto
                     {
                         Id = p.Id,
                         Nombre = p.Nombre,
-                        StockActual = p.StockActual,
+                        StockActual = p.TieneVariaciones ? p.Variaciones.Sum(v => v.StockActual) : p.StockActual,
                         StockMinimo = p.StockMinimo,
                         PrecioVenta = p.PrecioVenta,
-                        Estado = p.Estado
+                        Estado = p.Estado,
+                        TieneVariaciones = p.TieneVariaciones
                     })
                     .ToListAsync();
 
@@ -226,8 +252,8 @@ namespace NicaplusApi.Controllers
                     Descripcion = dto.Descripcion?.Trim() ?? string.Empty,
                     PrecioVenta = dto.PrecioVenta,
                     PrecioCosto = dto.PrecioCosto,
-                    StockActual = (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock) ? 0 : dto.StockActual,
-                    StockMinimo = (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock) ? 0 : dto.StockMinimo,
+                    StockActual = (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock || dto.TieneVariaciones) ? 0 : dto.StockActual,
+                    StockMinimo = (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock || dto.TieneVariaciones) ? 0 : dto.StockMinimo,
                     ImagenUrl = dto.ImagenUrl?.Trim() ?? string.Empty,
                     EsDigital = dto.EsDigital,
                     ControlaStock = dto.ControlaStock,
@@ -239,8 +265,32 @@ namespace NicaplusApi.Controllers
                     Proveedor = dto.Proveedor?.Trim() ?? string.Empty,
                     Estado = string.IsNullOrWhiteSpace(dto.Estado) ? "Activo" : dto.Estado.Trim(),
                     CategoriaId = dto.CategoriaId,
-                    JuegoId = dto.JuegoId
+                    JuegoId = dto.JuegoId,
+                    TieneVariaciones = dto.TieneVariaciones
                 };
+
+                // Inserción de variaciones asociadas
+                if (dto.TieneVariaciones && dto.Variaciones != null && dto.Variaciones.Any())
+                {
+                    foreach (var vDto in dto.Variaciones)
+                    {
+                        producto.Variaciones.Add(new VariacionProducto
+                        {
+                            SKU = string.IsNullOrWhiteSpace(vDto.SKU) ? $"{dto.Nombre.Substring(0, Math.Min(3, dto.Nombre.Length)).ToUpper()}-{vDto.NombreVariacion}" : vDto.SKU,
+                            Color = vDto.Color ?? vDto.NombreVariacion,
+                            Almacenamiento = vDto.Almacenamiento ?? string.Empty,
+                            RAM = vDto.RAM ?? string.Empty,
+                            Talla = vDto.Talla ?? string.Empty,
+                            NombreVariacion = vDto.NombreVariacion,
+                            PrecioVenta = vDto.PrecioVenta > 0 ? vDto.PrecioVenta : dto.PrecioVenta,
+                            PrecioCosto = vDto.PrecioCosto > 0 ? vDto.PrecioCosto : dto.PrecioCosto,
+                            StockActual = vDto.StockActual,
+                            StockMinimo = vDto.StockMinimo > 0 ? vDto.StockMinimo : 2,
+                            ImagenUrl = string.IsNullOrWhiteSpace(vDto.ImagenUrl) ? dto.ImagenUrl : vDto.ImagenUrl,
+                            Estado = "Activo"
+                        });
+                    }
+                }
 
                 _context.Productos.Add(producto);
                 await _context.SaveChangesAsync();
@@ -275,7 +325,10 @@ namespace NicaplusApi.Controllers
 
             try
             {
-                var productoExistente = await _context.Productos.FindAsync(id);
+                var productoExistente = await _context.Productos
+                    .Include(p => p.Variaciones)
+                    .FirstOrDefaultAsync(p => p.Id == id);
+
                 if (productoExistente == null)
                 {
                     return NotFound(new { mensaje = "El producto que intenta actualizar no existe." });
@@ -297,8 +350,9 @@ namespace NicaplusApi.Controllers
                 productoExistente.Estado = dto.Estado.Trim();
                 productoExistente.CategoriaId = dto.CategoriaId;
                 productoExistente.JuegoId = dto.JuegoId;
+                productoExistente.TieneVariaciones = dto.TieneVariaciones;
 
-                if (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock)
+                if (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock || dto.TieneVariaciones)
                 {
                     productoExistente.StockMinimo = 0;
                     productoExistente.StockActual = 0;
@@ -307,6 +361,52 @@ namespace NicaplusApi.Controllers
                 {
                     productoExistente.StockActual = dto.StockActual;
                     productoExistente.StockMinimo = dto.StockMinimo;
+                }
+
+                // Sincronización completa de Variaciones (Crear, Actualizar o Eliminar)
+                if (dto.TieneVariaciones && dto.Variaciones != null)
+                {
+                    var idsNuevos = dto.Variaciones.Where(v => v.Id > 0).Select(v => v.Id).ToList();
+                    var variacionesAEliminar = productoExistente.Variaciones.Where(v => !idsNuevos.Contains(v.Id)).ToList();
+                    
+                    _context.VariacionesProductos.RemoveRange(variacionesAEliminar);
+
+                    foreach (var vDto in dto.Variaciones)
+                    {
+                        if (vDto.Id > 0)
+                        {
+                            var vExistente = productoExistente.Variaciones.FirstOrDefault(v => v.Id == vDto.Id);
+                            if (vExistente != null)
+                            {
+                                vExistente.NombreVariacion = vDto.NombreVariacion;
+                                vExistente.Color = vDto.Color ?? vDto.NombreVariacion;
+                                vExistente.Almacenamiento = vDto.Almacenamiento ?? string.Empty;
+                                vExistente.RAM = vDto.RAM ?? string.Empty;
+                                vExistente.PrecioVenta = vDto.PrecioVenta;
+                                vExistente.PrecioCosto = vDto.PrecioCosto;
+                                vExistente.StockActual = vDto.StockActual;
+                            }
+                        }
+                        else
+                        {
+                            productoExistente.Variaciones.Add(new VariacionProducto
+                            {
+                                SKU = string.IsNullOrWhiteSpace(vDto.SKU) ? $"{dto.Nombre.Substring(0, Math.Min(3, dto.Nombre.Length)).ToUpper()}-{vDto.NombreVariacion}" : vDto.SKU,
+                                NombreVariacion = vDto.NombreVariacion,
+                                Color = vDto.Color ?? vDto.NombreVariacion,
+                                Almacenamiento = vDto.Almacenamiento ?? string.Empty,
+                                RAM = vDto.RAM ?? string.Empty,
+                                PrecioVenta = vDto.PrecioVenta,
+                                PrecioCosto = vDto.PrecioCosto,
+                                StockActual = vDto.StockActual,
+                                Estado = "Activo"
+                            });
+                        }
+                    }
+                }
+                else if (!dto.TieneVariaciones && productoExistente.Variaciones.Any())
+                {
+                    _context.VariacionesProductos.RemoveRange(productoExistente.Variaciones);
                 }
 
                 await _context.SaveChangesAsync();
@@ -320,7 +420,33 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // 6. DELETE: api/Products/5
+        // 6. PUT: api/Products/5/variaciones-stock (Sincronización del Modal Incremento/Decremento)
+        [HttpPut("{id}/variaciones-stock")]
+        [Authorize]
+        public async Task<IActionResult> UpdateStockVariaciones(int id, [FromBody] List<VariacionProductoDto> variacionesDto)
+        {
+            try
+            {
+                foreach (var vDto in variacionesDto)
+                {
+                    var variacionDb = await _context.VariacionesProductos.FindAsync(vDto.Id);
+                    if (variacionDb != null)
+                    {
+                        variacionDb.StockActual = vDto.StockActual;
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { mensaje = "Stock de variaciones actualizado correctamente." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al actualizar stock de variaciones del producto ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al actualizar unidades." });
+            }
+        }
+
+        // 7. DELETE: api/Products/5
         [HttpDelete("{id}")]
         [Authorize]
         public async Task<IActionResult> DeleteProducto(int id)

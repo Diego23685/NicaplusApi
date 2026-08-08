@@ -45,6 +45,7 @@ namespace NicaplusApi.Data
         public DbSet<ConfiguracionMensaje> ConfiguracionesMensajes { get; set; }
         public DbSet<Renovacion> Renovaciones { get; set; }
         public DbSet<Cancelacion> Cancelaciones { get; set; }
+        public DbSet<VariacionProducto> VariacionesProductos { get; set; }
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
@@ -168,6 +169,12 @@ namespace NicaplusApi.Data
                 entity.Property(p => p.Descripcion).HasMaxLength(500);
                 entity.Property(p => p.ImagenUrl).HasColumnType("longtext"); 
             });
+
+            modelBuilder.Entity<VariacionProducto>()
+                .HasOne(v => v.ProductoPadre)
+                .WithMany(p => p.Variaciones)
+                .HasForeignKey(v => v.ProductoPadreId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<Suscripcion>()
                 .HasOne(s => s.PerfilCuenta)

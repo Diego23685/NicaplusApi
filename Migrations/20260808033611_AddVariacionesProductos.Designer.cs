@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NicaplusApi.Data;
 
@@ -11,9 +12,11 @@ using NicaplusApi.Data;
 namespace NicaplusApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260808033611_AddVariacionesProductos")]
+    partial class AddVariacionesProductos
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -341,16 +344,11 @@ namespace NicaplusApi.Migrations
                     b.Property<decimal>("SubTotal")
                         .HasColumnType("decimal(18,2)");
 
-                    b.Property<int?>("VariacionId")
-                        .HasColumnType("int");
-
                     b.HasKey("Id");
 
                     b.HasIndex("IdProducto");
 
                     b.HasIndex("IdVenta");
-
-                    b.HasIndex("VariacionId");
 
                     b.ToTable("DetallesVentas");
                 });
@@ -1134,13 +1132,7 @@ namespace NicaplusApi.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("NicaplusApi.Models.VariacionProducto", "Variacion")
-                        .WithMany()
-                        .HasForeignKey("VariacionId");
-
                     b.Navigation("Producto");
-
-                    b.Navigation("Variacion");
 
                     b.Navigation("Venta");
                 });
