@@ -43,5 +43,6 @@ namespace NicaplusApi.DTOs
         public DateTime NuevaFechaVencimiento { get; set; }
         public string MetodoPago { get; set; } = string.Empty;
         public string Observacion { get; set; } = string.Empty;
+        public int? IdVenta { get; set; }
     }
 }

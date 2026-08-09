@@ -70,7 +70,12 @@ namespace NicaplusApi.Controllers
                         FechaAnterior = r.FechaAnterior,
                         NuevaFechaVencimiento = r.NuevaFechaVencimiento,
                         MetodoPago = r.MetodoPago,
-                        Observacion = r.Observacion
+                        Observacion = r.Observacion,
+                        // 🟢 OBTIENE EL ID DE VENTA/FACTURA ASOCIADO EN CAJA
+                        IdVenta = _context.MovimientosCaja
+                            .Where(m => m.IdRenovacion == r.Id)
+                            .Select(m => m.IdVenta)
+                            .FirstOrDefault()
                     })
                     .ToListAsync();
 
@@ -107,7 +112,12 @@ namespace NicaplusApi.Controllers
                         FechaAnterior = r.FechaAnterior,
                         NuevaFechaVencimiento = r.NuevaFechaVencimiento,
                         MetodoPago = r.MetodoPago,
-                        Observacion = r.Observacion
+                        Observacion = r.Observacion,
+                        // 🟢 OBTIENE EL ID DE VENTA/FACTURA ASOCIADO EN CAJA
+                        IdVenta = _context.MovimientosCaja
+                            .Where(m => m.IdRenovacion == r.Id)
+                            .Select(m => m.IdVenta)
+                            .FirstOrDefault()
                     })
                     .ToListAsync();
 
@@ -155,7 +165,6 @@ namespace NicaplusApi.Controllers
                 var fechaAnterior = suscripcion.FechaVencimiento;
                 int diasDuracion = suscripcion.Producto?.DiasDuracion ?? 30;
 
-                // Lógica de extensión comercial: acumulativa o reinicio si está vencida
                 DateTime nuevaFechaVencimiento = (suscripcion.FechaVencimiento < ahoraNicaragua)
                     ? fechaPagoReal.AddDays(diasDuracion)
                     : suscripcion.FechaVencimiento.AddDays(diasDuracion);
@@ -204,7 +213,7 @@ namespace NicaplusApi.Controllers
 
                 _context.Ventas.Add(venta);
 
-                // 4. MOVIMIENTO CAJA (Asociando navegaciones en memoria para resolución de Foreign Keys)
+                // 4. MOVIMIENTO CAJA
                 var movimientoCaja = new MovimientoCaja
                 {
                     Fecha = fechaPagoReal,
@@ -212,13 +221,12 @@ namespace NicaplusApi.Controllers
                     Concepto = "Renovacion",
                     Monto = dto.Monto,
                     Detalle = $"Renovación de cuenta streaming: {suscripcion.NombreServicio} | Método: {dto.MetodoPago.Trim()}",
-                    Venta = venta,           // ✅ CORREGIDO: Usar navegación en lugar de IdVenta = venta.Id
-                    Renovacion = renovacion  // ✅ Correcto
+                    Venta = venta,
+                    Renovacion = renovacion
                 };
 
                 _context.MovimientosCaja.Add(movimientoCaja);
 
-                // Commit de la unidad de trabajo en un único viaje a la BD
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
@@ -276,17 +284,12 @@ namespace NicaplusApi.Controllers
 
                 _context.Cancelaciones.Add(cancelacion);
 
-                // EVALUAR SI AÚN TIENE DÍAS VIGENTES
                 if (suscripcion.FechaVencimiento > ahoraNicaragua)
                 {
-                    // Solo marcar que no renovará cuando venza
                     suscripcion.Estado = "NoRenovar"; 
-                    
-                    // NO tocamos suscripcion.PerfilCuenta para que el cliente conserve su acceso
                 }
                 else
                 {
-                    // Si ya está vencida, procedemos a la baja e independización inmediata del perfil
                     suscripcion.Estado = "Cancelada";
 
                     if (suscripcion.PerfilCuenta != null)
