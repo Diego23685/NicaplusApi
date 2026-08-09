@@ -392,18 +392,17 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // 1. Obtener suscripciones anteriores
+                // Obtener suscripciones anteriores asociadas a esta venta
                 var suscripcionesViejas = await _context.Suscripciones
                     .Where(s => s.IdVenta == id)
                     .ToListAsync();
 
-                // 2. Extraer los IDs directos si existen
                 var idsPerfilesPropios = suscripcionesViejas
                     .Where(s => s.IdPerfilCuenta.HasValue)
                     .Select(s => s.IdPerfilCuenta!.Value)
                     .ToList();
 
-                // 🟢 FIX: Rescatar únicamente los perfiles asignados al cliente que correspondan a los productos de ESTA venta
+                // Rescatar perfiles asignados si no se encontraron vía IdPerfilCuenta
                 if (!idsPerfilesPropios.Any() && ventaOriginal.IdCliente.HasValue)
                 {
                     var idsProductosVenta = ventaOriginal.Detalles.Select(d => d.IdProducto).ToList();
@@ -415,23 +414,7 @@ namespace NicaplusApi.Controllers
                     idsPerfilesPropios.AddRange(idsRescatados);
                 }
 
-                if (suscripcionesViejas.Any())
-                {
-                    var idsSuscripcionesViejas = suscripcionesViejas.Select(s => s.Id).ToList();
-
-                    var renovacionesViejas = await _context.Renovaciones
-                        .Where(r => idsSuscripcionesViejas.Contains(r.IdSuscripcion))
-                        .ToListAsync();
-
-                    if (renovacionesViejas.Any())
-                    {
-                        _context.Renovaciones.RemoveRange(renovacionesViejas);
-                    }
-
-                    _context.Suscripciones.RemoveRange(suscripcionesViejas);
-                }
-
-                // 🟢 Liberar explícitamente los perfiles identificados
+                // Liberar temporalmente los perfiles para que la re-asignación posterior los pueda tomar
                 var perfilesAfectados = await _context.PerfilesCuentas
                     .Where(p => idsPerfilesPropios.Contains(p.Id))
                     .ToListAsync();
@@ -444,9 +427,8 @@ namespace NicaplusApi.Controllers
                     _context.PerfilesCuentas.Update(p);
                 }
 
+                // Limpiar los detalles de venta anteriores
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
-
-                // Persistencia intermedia única
                 await _context.SaveChangesAsync();
 
                 // ==========================================
@@ -487,7 +469,7 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // 1. Reutilizar perfiles previamente vinculados
+                        // Priorizar los perfiles que la venta ya tenía asignados
                         var perfilesReutilizables = await _context.PerfilesCuentas
                             .Where(p => idsPerfilesPropios.Contains(p.Id) && p.IdProducto == prod.Id)
                             .ToListAsync();
@@ -527,14 +509,12 @@ namespace NicaplusApi.Controllers
 
                             int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
 
-                            // 🟢 BUSCAR SI YA EXISTE LA SUSCRIPCIÓN PARA EVITAR CONFLICTO DE CLAVE FORÁNEA
-                            var suscripcionExistente = await _context.Suscripciones
-                                .FirstOrDefaultAsync(s => s.IdVenta == id || (s.IdCliente == idClienteFinal.Value && s.IdPerfilCuenta == perfil.Id && s.Estado != "Cancelada"));
+                            // Reutilizar o actualizar la suscripción existente para evitar la duplicación de perfiles y conflictos FK
+                            var suscripcionExistente = suscripcionesViejas.FirstOrDefault(s => s.IdPerfilCuenta == perfil.Id || s.IdProducto == prod.Id);
 
                             if (suscripcionExistente != null)
                             {
                                 suscripcionExistente.IdCliente = idClienteFinal.Value;
-                                suscripcionExistente.IdVenta = id;
                                 suscripcionExistente.NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})";
                                 suscripcionExistente.IdProducto = prod.Id;
                                 suscripcionExistente.IdPerfilCuenta = perfil.Id;
