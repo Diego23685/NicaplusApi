@@ -395,7 +395,7 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // Obtener suscripciones asociadas a esta venta
+                // Obtener suscripciones asociadas a esta venta antes de borrarlas
                 var suscripcionesViejas = await _context.Suscripciones
                     .Where(s => s.IdVenta == id)
                     .ToListAsync();
@@ -409,7 +409,7 @@ namespace NicaplusApi.Controllers
                 {
                     var idsSuscripcionesViejas = suscripcionesViejas.Select(s => s.Id).ToList();
 
-                    // Limpiar registros dependientes en la tabla Renovaciones antes de eliminar las suscripciones
+                    // Limpiar registros dependientes en Renovaciones
                     var renovacionesViejas = await _context.Renovaciones
                         .Where(r => idsSuscripcionesViejas.Contains(r.IdSuscripcion))
                         .ToListAsync();
@@ -439,7 +439,7 @@ namespace NicaplusApi.Controllers
                 }
 
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
-                await _context.SaveChangesAsync(); // Se persisten las eliminaciones y la liberación de perfiles en BD
+                await _context.SaveChangesAsync(); // Se persisten eliminaciones y liberación previa
 
                 // ==========================================
                 // 2. APLICACIÓN DE NUEVOS VALORES Y RE-ASIGNACIÓN
@@ -479,10 +479,29 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        var perfilesDisponibles = await _context.PerfilesCuentas
-                            .Where(p => p.IdProducto == prod.Id && (!p.Ocupado || idsPerfilesPropios.Contains(p.Id)))
-                            .Take(itemDto.Cantidad)
+                        // 🟢 1. PRIORIZAR PERFILES ANTERIORES DE ESTA MISMA VENTA
+                        var perfilesReutilizables = await _context.PerfilesCuentas
+                            .Where(p => idsPerfilesPropios.Contains(p.Id) && p.IdProducto == prod.Id)
                             .ToListAsync();
+
+                        int faltantes = itemDto.Cantidad - perfilesReutilizables.Count;
+                        List<PerfilCuenta> perfilesDisponibles = new List<PerfilCuenta>(perfilesReutilizables);
+
+                        // 🟢 2. SI AUMENTÓ LA CANTIDAD, TOMAR ADICIONALES LIBRES DEL INVENTARIO
+                        if (faltantes > 0)
+                        {
+                            var perfilesNuevos = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !idsPerfilesPropios.Contains(p.Id))
+                                .Take(faltantes)
+                                .ToListAsync();
+
+                            perfilesDisponibles.AddRange(perfilesNuevos);
+                        }
+                        // 🟢 3. SI DISMINUYÓ LA CANTIDAD, QUEDARSE SOLO CON LOS NECESARIOS
+                        else if (faltantes < 0)
+                        {
+                            perfilesDisponibles = perfilesDisponibles.Take(itemDto.Cantidad).ToList();
+                        }
 
                         if (perfilesDisponibles.Count < itemDto.Cantidad)
                             return BadRequest(new { mensaje = $"No existen suficientes pantallas disponibles para '{prod.Nombre}'." });
