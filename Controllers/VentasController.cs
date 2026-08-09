@@ -392,21 +392,33 @@ namespace NicaplusApi.Controllers
                     }
                 }
 
-                // Obtener suscripciones asociadas a esta venta antes de borrarlas
+                // 1. Obtener suscripciones anteriores
                 var suscripcionesViejas = await _context.Suscripciones
                     .Where(s => s.IdVenta == id)
                     .ToListAsync();
 
+                // 2. Extraer los IDs directos si existen
                 var idsPerfilesPropios = suscripcionesViejas
                     .Where(s => s.IdPerfilCuenta.HasValue)
                     .Select(s => s.IdPerfilCuenta!.Value)
                     .ToList();
 
+                // 🟢 FIX: Rescatar únicamente los perfiles asignados al cliente que correspondan a los productos de ESTA venta
+                if (!idsPerfilesPropios.Any() && ventaOriginal.IdCliente.HasValue)
+                {
+                    var idsProductosVenta = ventaOriginal.Detalles.Select(d => d.IdProducto).ToList();
+                    var idsRescatados = await _context.PerfilesCuentas
+                        .Where(p => p.IdClienteAsignado == ventaOriginal.IdCliente.Value && idsProductosVenta.Contains(p.IdProducto))
+                        .Select(p => p.Id)
+                        .ToListAsync();
+
+                    idsPerfilesPropios.AddRange(idsRescatados);
+                }
+
                 if (suscripcionesViejas.Any())
                 {
                     var idsSuscripcionesViejas = suscripcionesViejas.Select(s => s.Id).ToList();
 
-                    // Limpiar registros dependientes en Renovaciones
                     var renovacionesViejas = await _context.Renovaciones
                         .Where(r => idsSuscripcionesViejas.Contains(r.IdSuscripcion))
                         .ToListAsync();
@@ -416,28 +428,25 @@ namespace NicaplusApi.Controllers
                         _context.Renovaciones.RemoveRange(renovacionesViejas);
                     }
 
-                    // Liberar perfiles asociados
-                    foreach (var sus in suscripcionesViejas)
-                    {
-                        if (sus.IdPerfilCuenta.HasValue)
-                        {
-                            var perfil = await _context.PerfilesCuentas.FindAsync(sus.IdPerfilCuenta.Value);
-                            if (perfil != null)
-                            {
-                                perfil.Ocupado = false;
-                                perfil.IdClienteAsignado = null;
-                                perfil.EstadoPerfil = "Disponible";
-                                _context.PerfilesCuentas.Update(perfil);
-                            }
-                        }
-                    }
-
                     _context.Suscripciones.RemoveRange(suscripcionesViejas);
+                }
+
+                // 🟢 Liberar explícitamente los perfiles identificados
+                var perfilesAfectados = await _context.PerfilesCuentas
+                    .Where(p => idsPerfilesPropios.Contains(p.Id))
+                    .ToListAsync();
+
+                foreach (var p in perfilesAfectados)
+                {
+                    p.Ocupado = false;
+                    p.IdClienteAsignado = null;
+                    p.EstadoPerfil = "Disponible";
+                    _context.PerfilesCuentas.Update(p);
                 }
 
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
 
-                // 🔴 PERSISTENCIA INTERMEDIA: Libera perfiles y elimina suscripciones en BD para poder reasignarlos
+                // Persistencia intermedia única
                 await _context.SaveChangesAsync();
 
                 // ==========================================
@@ -478,7 +487,7 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // 🟢 1. PRIORIZAR PERFILES QUE PERTENECÍAN A ESTA MISMA VENTA
+                        // 1. Priorizar perfiles que pertenecían a esta misma venta
                         var perfilesReutilizables = await _context.PerfilesCuentas
                             .Where(p => idsPerfilesPropios.Contains(p.Id) && p.IdProducto == prod.Id)
                             .ToListAsync();
@@ -486,7 +495,7 @@ namespace NicaplusApi.Controllers
                         int faltantes = itemDto.Cantidad - perfilesReutilizables.Count;
                         List<PerfilCuenta> perfilesDisponibles = new List<PerfilCuenta>(perfilesReutilizables);
 
-                        // 🟢 2. SI AUMENTÓ LA CANTIDAD, TOMAR ADICIONALES LIBRES
+                        // 2. Si aumentó la cantidad, tomar adicionales libres del inventario
                         if (faltantes > 0)
                         {
                             var perfilesNuevos = await _context.PerfilesCuentas
@@ -496,7 +505,7 @@ namespace NicaplusApi.Controllers
 
                             perfilesDisponibles.AddRange(perfilesNuevos);
                         }
-                        // 🟢 3. SI DISMINUYÓ LA CANTIDAD, TOMAR SOLO LOS NECESARIOS
+                        // 3. Si disminuyó la cantidad, tomar solo los necesarios
                         else if (faltantes < 0)
                         {
                             perfilesDisponibles = perfilesDisponibles.Take(itemDto.Cantidad).ToList();
