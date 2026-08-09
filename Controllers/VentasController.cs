@@ -509,15 +509,21 @@ namespace NicaplusApi.Controllers
 
                             int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
 
-                            // Reutilizar o actualizar la suscripción existente para evitar la duplicación de perfiles y conflictos FK
-                            var suscripcionExistente = suscripcionesViejas.FirstOrDefault(s => s.IdPerfilCuenta == perfil.Id || s.IdProducto == prod.Id);
+                            // 🟢 BÚSQUEDA ROBUSTA EN BD: Asocia la suscripción existente por ID de Venta, ID de Perfil O coincidencia de Credenciales (Nombre/Correo)
+                            var suscripcionExistente = await _context.Suscripciones
+                                .FirstOrDefaultAsync(s => s.IdVenta == id 
+                                                    || s.IdPerfilCuenta == perfil.Id 
+                                                    || (s.IdCliente == idClienteFinal.Value 
+                                                        && (s.DetallesCredenciales.Contains(perfil.NombrePerfil) || s.DetallesCredenciales.Contains(perfil.CorreoCuenta))
+                                                        && s.Estado != "Cancelada"));
 
                             if (suscripcionExistente != null)
                             {
                                 suscripcionExistente.IdCliente = idClienteFinal.Value;
+                                suscripcionExistente.IdVenta = id;
                                 suscripcionExistente.NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})";
                                 suscripcionExistente.IdProducto = prod.Id;
-                                suscripcionExistente.IdPerfilCuenta = perfil.Id;
+                                suscripcionExistente.IdPerfilCuenta = perfil.Id; // Asigna el IdPerfilCuenta a los registros antiguos que venían nulos
                                 suscripcionExistente.CostoRenovacion = itemDto.PrecioUnitario;
                                 suscripcionExistente.FechaVencimiento = ventaOriginal.FechaVenta.AddDays(diasEfectivos);
                                 suscripcionExistente.Estado = "Activa";
