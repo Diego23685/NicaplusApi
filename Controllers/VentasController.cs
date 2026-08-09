@@ -201,7 +201,6 @@ namespace NicaplusApi.Controllers
 
                     VariacionProducto? variacionElegida = null;
 
-                    // 🟢 1. MANEJO Y VALIDACIÓN DE STOCK PARA VARIACIONES
                     if (itemDto.IdVariacion.HasValue && itemDto.IdVariacion.Value > 0)
                     {
                         variacionElegida = await _context.VariacionesProductos.FindAsync(itemDto.IdVariacion.Value);
@@ -213,12 +212,10 @@ namespace NicaplusApi.Controllers
                             return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre} ({variacionElegida.NombreVariacion}). Disponible: {variacionElegida.StockActual}" });
                         }
 
-                        // Descuento directo de stock en la variación
                         variacionElegida.StockActual -= itemDto.Cantidad;
                         if (variacionElegida.StockActual <= 0) variacionElegida.Estado = "Agotado";
                         _context.VariacionesProductos.Update(variacionElegida);
                     }
-                    // 🟢 2. MANEJO Y VALIDACIÓN DE STOCK PARA PRODUCTOS NORMALES
                     else if (prod.ControlaStock && !prod.EsDigital && !prod.RequiereServicio)
                     {
                         if (prod.StockActual < itemDto.Cantidad)
@@ -233,7 +230,7 @@ namespace NicaplusApi.Controllers
                     {
                         IdVenta = nuevaVenta.Id,
                         IdProducto = prod.Id,
-                        VariacionId = itemDto.IdVariacion, // 👈 Guarda la variación en el detalle de la factura
+                        VariacionId = itemDto.IdVariacion,
                         Cantidad = itemDto.Cantidad,
                         PrecioUnitario = itemDto.PrecioUnitario,
                         Descuento = itemDto.Descuento,
@@ -439,7 +436,9 @@ namespace NicaplusApi.Controllers
                 }
 
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
-                await _context.SaveChangesAsync(); // Se persisten eliminaciones y liberación previa
+
+                // 🔴 PERSISTENCIA INTERMEDIA: Libera perfiles y elimina suscripciones en BD para poder reasignarlos
+                await _context.SaveChangesAsync();
 
                 // ==========================================
                 // 2. APLICACIÓN DE NUEVOS VALORES Y RE-ASIGNACIÓN
@@ -479,7 +478,7 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // 🟢 1. PRIORIZAR PERFILES ANTERIORES DE ESTA MISMA VENTA
+                        // 🟢 1. PRIORIZAR PERFILES QUE PERTENECÍAN A ESTA MISMA VENTA
                         var perfilesReutilizables = await _context.PerfilesCuentas
                             .Where(p => idsPerfilesPropios.Contains(p.Id) && p.IdProducto == prod.Id)
                             .ToListAsync();
@@ -487,7 +486,7 @@ namespace NicaplusApi.Controllers
                         int faltantes = itemDto.Cantidad - perfilesReutilizables.Count;
                         List<PerfilCuenta> perfilesDisponibles = new List<PerfilCuenta>(perfilesReutilizables);
 
-                        // 🟢 2. SI AUMENTÓ LA CANTIDAD, TOMAR ADICIONALES LIBRES DEL INVENTARIO
+                        // 🟢 2. SI AUMENTÓ LA CANTIDAD, TOMAR ADICIONALES LIBRES
                         if (faltantes > 0)
                         {
                             var perfilesNuevos = await _context.PerfilesCuentas
@@ -497,7 +496,7 @@ namespace NicaplusApi.Controllers
 
                             perfilesDisponibles.AddRange(perfilesNuevos);
                         }
-                        // 🟢 3. SI DISMINUYÓ LA CANTIDAD, QUEDARSE SOLO CON LOS NECESARIOS
+                        // 🟢 3. SI DISMINUYÓ LA CANTIDAD, TOMAR SOLO LOS NECESARIOS
                         else if (faltantes < 0)
                         {
                             perfilesDisponibles = perfilesDisponibles.Take(itemDto.Cantidad).ToList();
@@ -621,7 +620,6 @@ namespace NicaplusApi.Controllers
                 // =========================================================
                 foreach (var detalle in venta.Detalles)
                 {
-                    // 🟢 A) Si es una Variación de Producto: devolvemos stock a VariacionesProductos
                     if (detalle.VariacionId.HasValue && detalle.VariacionId.Value > 0)
                     {
                         var variacion = await _context.VariacionesProductos.FindAsync(detalle.VariacionId.Value);
@@ -635,7 +633,6 @@ namespace NicaplusApi.Controllers
                             _context.VariacionesProductos.Update(variacion);
                         }
                     }
-                    // 🟢 B) Si es un Producto Plano sin variantes: devolvemos stock a Productos
                     else
                     {
                         var prod = await _context.Productos.FindAsync(detalle.IdProducto);
@@ -662,7 +659,6 @@ namespace NicaplusApi.Controllers
                 {
                     var idsSuscripciones = suscripciones.Select(s => s.Id).ToList();
 
-                    // Limpieza en cascada de renovaciones vinculadas
                     var renovacionesAsociadas = await _context.Renovaciones
                         .Where(r => idsSuscripciones.Contains(r.IdSuscripcion))
                         .ToListAsync();
@@ -672,7 +668,6 @@ namespace NicaplusApi.Controllers
                         _context.Renovaciones.RemoveRange(renovacionesAsociadas);
                     }
 
-                    // Liberación de perfiles de streaming
                     foreach (var sus in suscripciones)
                     {
                         if (sus.IdPerfilCuenta.HasValue)
