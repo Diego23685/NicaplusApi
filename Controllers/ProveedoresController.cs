@@ -57,7 +57,6 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // NUEVO: GET: api/Proveedores/compras (Historial de Compras)
         [HttpGet("compras")]
         public async Task<IActionResult> GetHistorialCompras()
         {
@@ -68,6 +67,8 @@ namespace NicaplusApi.Controllers
                     .Include(c => c.Proveedor)
                     .Include(c => c.Detalles!)
                         .ThenInclude(d => d.Producto)
+                    .Include(c => c.Detalles!)
+                        .ThenInclude(d => d.Variacion) // Cargar la variante
                     .OrderByDescending(c => c.Id)
                     .Select(c => new CompraResumenDto
                     {
@@ -76,12 +77,14 @@ namespace NicaplusApi.Controllers
                         ProveedorNombre = c.Proveedor != null ? c.Proveedor.RazonSocial : "Proveedor General",
                         FechaCompra = c.FechaCompra.ToString("yyyy-MM-dd HH:mm:ss"),
                         TotalCompra = c.TotalCompra,
-                        Observaciones = c.Observaciones, // Incluir observaciones en el resumen
+                        Observaciones = c.Observaciones,
                         Detalles = c.Detalles.Select(d => new DetalleCompraResumenDto
                         {
                             Id = d.Id,
                             IdProducto = d.IdProducto,
+                            IdVariacion = d.IdVariacion,
                             ProductoNombre = d.Producto != null ? d.Producto.Nombre : "Producto General",
+                            VariacionNombre = d.Variacion != null ? d.Variacion.NombreVariacion : null,
                             Cantidad = d.Cantidad,
                             CostoUnitario = d.CostoUnitario,
                             SubTotal = d.Cantidad * d.CostoUnitario,
@@ -285,32 +288,69 @@ namespace NicaplusApi.Controllers
 
                 foreach (var item in dto.Detalles)
                 {
-                    var producto = await _context.Productos.FindAsync(item.IdProducto);
+                    var producto = await _context.Productos
+                        .Include(p => p.Variaciones)
+                        .FirstOrDefaultAsync(p => p.Id == item.IdProducto);
+
                     if (producto == null)
                     {
                         await transaction.RollbackAsync();
                         return BadRequest(new { mensaje = $"El producto con ID {item.IdProducto} no existe." });
                     }
 
-                    if (producto.ControlaStock && !producto.EsDigital)
+                    // SI EL PRODUCTO MANEJA VARIANTES
+                    if (producto.TieneVariaciones)
                     {
-                        producto.StockActual += item.Cantidad;
-                        if (producto.Estado == "Agotado" && producto.StockActual > 0) producto.Estado = "Activo";
+                        if (!item.IdVariacion.HasValue)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { mensaje = $"El producto '{producto.Nombre}' requiere especificar una variante (IdVariacion)." });
+                        }
+
+                        var variacion = producto.Variaciones.FirstOrDefault(v => v.Id == item.IdVariacion.Value);
+                        if (variacion == null)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { mensaje = $"La variante ID {item.IdVariacion} no pertenece al producto '{producto.Nombre}'." });
+                        }
+
+                        // 1. Aumentar stock de la VARIANTES
+                        variacion.StockActual += item.Cantidad;
+                        if (variacion.Estado == "Agotado" && variacion.StockActual > 0) 
+                            variacion.Estado = "Activo";
+
+                        // 2. Actualizar Costo y Precio de Venta de la VARIANTE
+                        variacion.PrecioCosto = item.CostoUnitario;
+                        if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
+                        {
+                            variacion.PrecioVenta = item.NuevoPrecioVenta.Value;
+                        }
+                    }
+                    // SI ES UN PRODUCTO SIMPLE (SIN VARIANTES)
+                    else
+                    {
+                        if (producto.ControlaStock && !producto.EsDigital)
+                        {
+                            producto.StockActual += item.Cantidad;
+                            if (producto.Estado == "Agotado" && producto.StockActual > 0) 
+                                producto.Estado = "Activo";
+                        }
+
+                        producto.PrecioCosto = item.CostoUnitario;
+                        if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
+                        {
+                            producto.PrecioVenta = item.NuevoPrecioVenta.Value;
+                        }
                     }
 
-                    producto.PrecioCosto = item.CostoUnitario;
+                    // Datos generales del producto padre
                     producto.GarantiaDias = item.GarantiaDiasPactada;
                     producto.Proveedor = proveedor.RazonSocial;
-
-                    // NUEVO: Si se envió un nuevo PrecioVenta, se actualiza el catálogo al instante
-                    if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
-                    {
-                        producto.PrecioVenta = item.NuevoPrecioVenta.Value;
-                    }
 
                     nuevaCompra.Detalles.Add(new DetalleCompraProveedor
                     {
                         IdProducto = item.IdProducto,
+                        IdVariacion = item.IdVariacion, // Se guarda la variante asociada
                         Cantidad = item.Cantidad,
                         CostoUnitario = item.CostoUnitario,
                         GarantiaDiasPactada = item.GarantiaDiasPactada
@@ -371,14 +411,30 @@ namespace NicaplusApi.Controllers
                 // 1. Revertir el stock de la compra anterior
                 foreach (var detalleOrig in compraOriginal.Detalles)
                 {
-                    var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
-                    if (prod != null && prod.ControlaStock && !prod.EsDigital)
+                    if (detalleOrig.IdVariacion.HasValue)
                     {
-                        prod.StockActual -= detalleOrig.Cantidad;
-                        if (prod.StockActual <= 0)
+                        var variacion = await _context.VariacionesProductos.FindAsync(detalleOrig.IdVariacion.Value);
+                        if (variacion != null)
                         {
-                            prod.StockActual = 0;
-                            prod.Estado = "Agotado";
+                            variacion.StockActual -= detalleOrig.Cantidad;
+                            if (variacion.StockActual <= 0)
+                            {
+                                variacion.StockActual = 0;
+                                variacion.Estado = "Agotado";
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
+                        if (prod != null && prod.ControlaStock && !prod.EsDigital)
+                        {
+                            prod.StockActual -= detalleOrig.Cantidad;
+                            if (prod.StockActual <= 0)
+                            {
+                                prod.StockActual = 0;
+                                prod.Estado = "Agotado";
+                            }
                         }
                     }
                 }
@@ -387,7 +443,7 @@ namespace NicaplusApi.Controllers
                 _context.DetallesComprasProveedores.RemoveRange(compraOriginal.Detalles);
                 await _context.SaveChangesAsync();
 
-                // 2. Aplicar los nuevos datos
+                // 2. Aplicar los nuevos datos con la misma lógica de variantes que RegistrarCompra
                 compraOriginal.IdProveedor = dto.IdProveedor;
                 compraOriginal.TotalCompra = dto.TotalCompra;
                 compraOriginal.Observaciones = dto.Observaciones?.Trim();
@@ -395,32 +451,62 @@ namespace NicaplusApi.Controllers
 
                 foreach (var item in dto.Detalles)
                 {
-                    var producto = await _context.Productos.FindAsync(item.IdProducto);
+                    var producto = await _context.Productos
+                        .Include(p => p.Variaciones)
+                        .FirstOrDefaultAsync(p => p.Id == item.IdProducto);
+
                     if (producto == null)
                     {
                         await transaction.RollbackAsync();
                         return BadRequest(new { mensaje = $"El producto con ID {item.IdProducto} no existe." });
                     }
 
-                    if (producto.ControlaStock && !producto.EsDigital)
+                    if (producto.TieneVariaciones)
                     {
-                        producto.StockActual += item.Cantidad;
-                        if (producto.Estado == "Agotado" && producto.StockActual > 0) 
-                            producto.Estado = "Activo";
+                        if (!item.IdVariacion.HasValue)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { mensaje = $"El producto '{producto.Nombre}' requiere variante." });
+                        }
+
+                        var variacion = producto.Variaciones.FirstOrDefault(v => v.Id == item.IdVariacion.Value);
+                        if (variacion == null)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { mensaje = $"La variante ID {item.IdVariacion} no pertenece a '{producto.Nombre}'." });
+                        }
+
+                        variacion.StockActual += item.Cantidad;
+                        if (variacion.Estado == "Agotado" && variacion.StockActual > 0) variacion.Estado = "Activo";
+
+                        variacion.PrecioCosto = item.CostoUnitario;
+                        if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
+                        {
+                            variacion.PrecioVenta = item.NuevoPrecioVenta.Value;
+                        }
+                    }
+                    else
+                    {
+                        if (producto.ControlaStock && !producto.EsDigital)
+                        {
+                            producto.StockActual += item.Cantidad;
+                            if (producto.Estado == "Agotado" && producto.StockActual > 0) producto.Estado = "Activo";
+                        }
+
+                        producto.PrecioCosto = item.CostoUnitario;
+                        if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
+                        {
+                            producto.PrecioVenta = item.NuevoPrecioVenta.Value;
+                        }
                     }
 
-                    producto.PrecioCosto = item.CostoUnitario;
                     producto.GarantiaDias = item.GarantiaDiasPactada;
                     producto.Proveedor = proveedor.RazonSocial;
-
-                    if (item.NuevoPrecioVenta.HasValue && item.NuevoPrecioVenta.Value > 0)
-                    {
-                        producto.PrecioVenta = item.NuevoPrecioVenta.Value;
-                    }
 
                     compraOriginal.Detalles.Add(new DetalleCompraProveedor
                     {
                         IdProducto = item.IdProducto,
+                        IdVariacion = item.IdVariacion,
                         Cantidad = item.Cantidad,
                         CostoUnitario = item.CostoUnitario,
                         GarantiaDiasPactada = item.GarantiaDiasPactada
@@ -439,7 +525,7 @@ namespace NicaplusApi.Controllers
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                return Ok(new { mensaje = $"Orden de compra #{id} actualizada exitosamente. Inventario y egreso en caja recalculados." });
+                return Ok(new { mensaje = $"Orden de compra #{id} actualizada exitosamente." });
             }
             catch (Exception ex)
             {
@@ -463,17 +549,33 @@ namespace NicaplusApi.Controllers
                 if (compra == null)
                     return NotFound(new { mensaje = "La orden de compra no existe." });
 
-                // 1. Revertir Stock
+                // 1. Revertir Stock de variantes o productos simples
                 foreach (var detalle in compra.Detalles)
                 {
-                    var prod = await _context.Productos.FindAsync(detalle.IdProducto);
-                    if (prod != null && prod.ControlaStock && !prod.EsDigital)
+                    if (detalle.IdVariacion.HasValue)
                     {
-                        prod.StockActual -= detalle.Cantidad;
-                        if (prod.StockActual <= 0)
+                        var variacion = await _context.VariacionesProductos.FindAsync(detalle.IdVariacion.Value);
+                        if (variacion != null)
                         {
-                            prod.StockActual = 0;
-                            prod.Estado = "Agotado";
+                            variacion.StockActual -= detalle.Cantidad;
+                            if (variacion.StockActual <= 0)
+                            {
+                                variacion.StockActual = 0;
+                                variacion.Estado = "Agotado";
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var prod = await _context.Productos.FindAsync(detalle.IdProducto);
+                        if (prod != null && prod.ControlaStock && !prod.EsDigital)
+                        {
+                            prod.StockActual -= detalle.Cantidad;
+                            if (prod.StockActual <= 0)
+                            {
+                                prod.StockActual = 0;
+                                prod.Estado = "Agotado";
+                            }
                         }
                     }
                 }

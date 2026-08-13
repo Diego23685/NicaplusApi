@@ -30,6 +30,8 @@ namespace NicaplusApi.DTOs
         [Required]
         public int IdProducto { get; set; }
 
+        public int? IdVariacion { get; set; } // Permite especificar una variación del producto si aplica
+
         [Range(1, int.MaxValue, ErrorMessage = "La cantidad debe ser de al menos 1 unidad.")]
         public int Cantidad { get; set; }
 
@@ -75,6 +77,9 @@ namespace NicaplusApi.DTOs
         public int Id { get; set; }
         public int IdProducto { get; set; }
         public string ProductoNombre { get; set; } = string.Empty;
+
+        public int? IdVariacion { get; set; } // Permite especificar una variación del producto si aplica
+        public string? VariacionNombre { get; set; } // Nombre de la variación si aplica
         public int Cantidad { get; set; }
         public decimal CostoUnitario { get; set; }
         public decimal SubTotal { get; set; }

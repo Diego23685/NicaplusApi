@@ -40,6 +40,8 @@ namespace NicaplusApi.Models
         [Required]
         public int IdProducto { get; set; }
 
+        public int? IdVariacion { get; set; } // Permite especificar una variación del producto si aplica
+
         [Required]
         public int Cantidad { get; set; }
 
@@ -53,5 +55,8 @@ namespace NicaplusApi.Models
 
         [ForeignKey("IdProducto")]
         public Producto? Producto { get; set; }
+
+        [ForeignKey("IdVariacion")]
+        public VariacionProducto? Variacion { get; set; } // Relación opcional
     }
 }
