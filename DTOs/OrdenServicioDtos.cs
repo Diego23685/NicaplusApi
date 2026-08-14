@@ -4,8 +4,7 @@ namespace NicaplusApi.DTOs
 {
     public class CrearOrdenServicioDto
     {
-        [Required(ErrorMessage = "El cliente es obligatorio.")]
-        public int IdCliente { get; set; }
+        public int? IdCliente { get; set; }
 
         public int? IdUsuario { get; set; } // Técnico asignado opcional
 
@@ -46,16 +45,27 @@ namespace NicaplusApi.DTOs
     public class OrdenServicioResponseDto
     {
         public int Id { get; set; }
-        public int IdCliente { get; set; }
-        public string ClienteNombre { get; set; } = null!;
+
+        public int? IdCliente { get; set; }
+
+        public string ClienteNombre { get; set; } = string.Empty;
+
         public string ClienteTelefono { get; set; } = string.Empty;
+
         public int? IdUsuario { get; set; }
+
         public string TecnicoNombre { get; set; } = string.Empty;
+
         public string Dispositivo { get; set; } = null!;
+
         public string Diagnostico { get; set; } = null!;
+
         public string Estado { get; set; } = null!;
+
         public DateTime FechaIngreso { get; set; }
+
         public DateTime? FechaEntrega { get; set; }
+
         public string Notas { get; set; } = string.Empty;
     }
 }

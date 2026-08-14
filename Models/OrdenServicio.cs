@@ -8,24 +8,23 @@ namespace NicaplusApi.Models
         [Key]
         public int Id { get; set; }
 
-        [Required]
-        public int IdCliente { get; set; }
+        public int? IdCliente { get; set; }
 
-        public int? IdUsuario { get; set; } // Técnico asignado (puede iniciar sin técnico)
+        public int? IdUsuario { get; set; }
 
         [Required]
         [StringLength(100)]
-        public string Dispositivo { get; set; } = string.Empty; // Ej: Laptop Dell, PS4 Pro
+        public string Dispositivo { get; set; } = string.Empty;
 
         [Required]
         public string Diagnostico { get; set; } = string.Empty;
 
         [Required]
         [StringLength(50)]
-        public string Estado { get; set; } = "Recibido"; // Recibido, En Revisión, Listo, Entregado
+        public string Estado { get; set; } = "Recibido";
 
         public DateTime FechaIngreso { get; set; } = DateTime.UtcNow;
-        
+
         public DateTime? FechaEntrega { get; set; }
 
         public string Notas { get; set; } = string.Empty;
