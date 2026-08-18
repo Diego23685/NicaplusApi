@@ -90,7 +90,7 @@ namespace NicaplusApi.Controllers
                             ? _context.PerfilesCuentas
                                 .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
                                 .OrderBy(pc => pc.Id)
-                                .Select(pc => $"Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}")
+                                .Select(pc => $"Perfil: {pc.NombrePerfil} | Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}")
                                 .FirstOrDefault()
                             : null
                     })
@@ -128,7 +128,7 @@ namespace NicaplusApi.Controllers
                     {
                         disponible = true,
                         idPerfil = pc.Id,
-                        metadataDigital = $"Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}"
+                        metadataDigital = $"Perfil: {pc.NombrePerfil} | Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}"
                     })
                     .FirstOrDefaultAsync();
 
