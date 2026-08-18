@@ -384,11 +384,25 @@ namespace NicaplusApi.Controllers
                 // ==========================================
                 foreach (var detalleOrig in ventaOriginal.Detalles)
                 {
-                    var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
-                    if (prod != null && prod.ControlaStock)
+                    if (detalleOrig.VariacionId.HasValue && detalleOrig.VariacionId.Value > 0)
                     {
-                        prod.StockActual += detalleOrig.Cantidad;
-                        if (prod.Estado == "Agotado" && prod.StockActual > 0) prod.Estado = "Activo";
+                        var variacion = await _context.VariacionesProductos.FindAsync(detalleOrig.VariacionId.Value);
+                        if (variacion != null)
+                        {
+                            variacion.StockActual += detalleOrig.Cantidad;
+                            if (variacion.Estado == "Agotado" && variacion.StockActual > 0) variacion.Estado = "Activo";
+                            _context.VariacionesProductos.Update(variacion);
+                        }
+                    }
+                    else
+                    {
+                        var prod = await _context.Productos.FindAsync(detalleOrig.IdProducto);
+                        if (prod != null && prod.ControlaStock && !prod.TieneVariaciones)
+                        {
+                            prod.StockActual += detalleOrig.Cantidad;
+                            if (prod.Estado == "Agotado" && prod.StockActual > 0) prod.Estado = "Activo";
+                            _context.Productos.Update(prod);
+                        }
                     }
                 }
 
@@ -445,19 +459,35 @@ namespace NicaplusApi.Controllers
                     if (prod == null)
                         return BadRequest(new { mensaje = $"El producto con ID {itemDto.IdProducto} no existe." });
 
-                    if (prod.ControlaStock)
+                    // Descuento de inventario según tipo de producto/variante
+                    if (itemDto.IdVariacion.HasValue && itemDto.IdVariacion.Value > 0)
+                    {
+                        var variacionElegida = await _context.VariacionesProductos.FindAsync(itemDto.IdVariacion.Value);
+                        if (variacionElegida == null)
+                            return BadRequest(new { mensaje = "La variación elegida no existe en el catálogo." });
+
+                        if (variacionElegida.StockActual < itemDto.Cantidad)
+                            return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre} ({variacionElegida.NombreVariacion}). Disponible: {variacionElegida.StockActual}" });
+
+                        variacionElegida.StockActual -= itemDto.Cantidad;
+                        if (variacionElegida.StockActual <= 0) variacionElegida.Estado = "Agotado";
+                        _context.VariacionesProductos.Update(variacionElegida);
+                    }
+                    else if (prod.ControlaStock && !prod.EsDigital && !prod.RequiereServicio && !prod.TieneVariaciones)
                     {
                         if (prod.StockActual < itemDto.Cantidad)
                             return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre}. Disponible: {prod.StockActual}" });
 
                         prod.StockActual -= itemDto.Cantidad;
                         if (prod.StockActual <= 0) prod.Estado = "Agotado";
+                        _context.Productos.Update(prod);
                     }
 
                     var nuevoDetalle = new DetalleVenta
                     {
                         IdVenta = id,
                         IdProducto = prod.Id,
+                        VariacionId = itemDto.IdVariacion,
                         Cantidad = itemDto.Cantidad,
                         PrecioUnitario = itemDto.PrecioUnitario,
                         Descuento = itemDto.Descuento,
@@ -469,7 +499,7 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // Priorizar los perfiles que la venta ya tenía asignados
+                        // Priorizar perfiles que la venta ya tenía asignados
                         var perfilesReutilizables = await _context.PerfilesCuentas
                             .Where(p => idsPerfilesPropios.Contains(p.Id) && p.IdProducto == prod.Id)
                             .ToListAsync();
@@ -509,7 +539,6 @@ namespace NicaplusApi.Controllers
 
                             int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
 
-                            // 🟢 BÚSQUEDA ROBUSTA EN BD: Asocia la suscripción existente por ID de Venta, ID de Perfil O coincidencia de Credenciales (Nombre/Correo)
                             var suscripcionExistente = await _context.Suscripciones
                                 .FirstOrDefaultAsync(s => s.IdVenta == id 
                                                     || s.IdPerfilCuenta == perfil.Id 
@@ -523,7 +552,7 @@ namespace NicaplusApi.Controllers
                                 suscripcionExistente.IdVenta = id;
                                 suscripcionExistente.NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})";
                                 suscripcionExistente.IdProducto = prod.Id;
-                                suscripcionExistente.IdPerfilCuenta = perfil.Id; // Asigna el IdPerfilCuenta a los registros antiguos que venían nulos
+                                suscripcionExistente.IdPerfilCuenta = perfil.Id;
                                 suscripcionExistente.CostoRenovacion = itemDto.PrecioUnitario;
                                 suscripcionExistente.FechaVencimiento = ventaOriginal.FechaVenta.AddDays(diasEfectivos);
                                 suscripcionExistente.Estado = "Activa";

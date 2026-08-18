@@ -331,6 +331,12 @@ namespace NicaplusApi.Controllers
                     return BadRequest(new { mensaje = "No se puede eliminar un perfil asignado a un cliente activo." });
                 }
 
+                var tieneSuscripciones = await _context.Suscripciones.AnyAsync(s => s.IdPerfilCuenta == id);
+                if (tieneSuscripciones)
+                {
+                    return BadRequest(new { mensaje = "El perfil posee historial de suscripciones asociadas y no puede ser eliminado físicamente para preservar la integridad de los reportes." });
+                }
+
                 _context.PerfilesCuentas.Remove(perfil);
                 await _context.SaveChangesAsync();
 

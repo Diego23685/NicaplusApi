@@ -165,6 +165,27 @@ namespace NicaplusApi.Controllers
 
                 var ahoraNicaragua = GetNicaraguaTime();
 
+                // 🟢 Validar y ocupar el perfil si viene especificado
+                if (dto.IdPerfilCuenta.HasValue)
+                {
+                    var perfil = await _context.PerfilesCuentas.FindAsync(dto.IdPerfilCuenta.Value);
+                    if (perfil == null)
+                    {
+                        return BadRequest(new { mensaje = "El perfil seleccionado no existe." });
+                    }
+
+                    if (perfil.Ocupado)
+                    {
+                        return BadRequest(new { mensaje = "El perfil seleccionado ya se encuentra ocupado." });
+                    }
+
+                    perfil.Ocupado = true;
+                    perfil.IdClienteAsignado = dto.IdCliente;
+                    perfil.EstadoPerfil = "Asignado";
+                    perfil.FechaAsignacion = ahoraNicaragua;
+                    _context.PerfilesCuentas.Update(perfil);
+                }
+
                 // Extraer ID del usuario autenticado vía JWT
                 var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 int idUsuarioOperador = int.TryParse(userIdClaim, out int idParsed) ? idParsed : 1;
@@ -206,7 +227,7 @@ namespace NicaplusApi.Controllers
                 {
                     var detalle = new DetalleVenta
                     {
-                        Venta = venta, // EF Core resuelve la relación automáticamente
+                        Venta = venta,
                         IdProducto = suscripcion.IdProducto.Value,
                         Cantidad = 1,
                         PrecioUnitario = suscripcion.CostoRenovacion,
@@ -281,19 +302,29 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // DELETE: api/Suscripciones/5 (Baja Lógica)
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
-            var suscripcion = await _context.Suscripciones.FindAsync(id);
+            var suscripcion = await _context.Suscripciones
+                .Include(s => s.PerfilCuenta)
+                .FirstOrDefaultAsync(s => s.Id == id);
+
             if (suscripcion == null)
                 return NotFound(new { mensaje = "Suscripción no encontrada." });
 
             suscripcion.Estado = "Cancelada";
-            _context.Entry(suscripcion).State = EntityState.Modified;
-            await _context.SaveChangesAsync();
 
-            return Ok(new { mensaje = $"Suscripción #{id} cancelada correctamente." });
+            if (suscripcion.PerfilCuenta != null)
+            {
+                suscripcion.PerfilCuenta.Ocupado = false;
+                suscripcion.PerfilCuenta.IdClienteAsignado = null;
+                suscripcion.PerfilCuenta.EstadoPerfil = "Disponible";
+                suscripcion.PerfilCuenta.FechaLiberacion = GetNicaraguaTime();
+                _context.PerfilesCuentas.Update(suscripcion.PerfilCuenta);
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { mensaje = $"Suscripción #{id} cancelada y perfil liberado." });
         }
     }
 }

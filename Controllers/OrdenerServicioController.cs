@@ -550,8 +550,7 @@ namespace NicaplusApi.Controllers
                 return BadRequest(
                     new
                     {
-                        mensaje =
-                            "Datos de entrega inválidos.",
+                        mensaje = "Datos de entrega inválidos.",
                         detalles = ModelState
                     });
             }
@@ -565,8 +564,7 @@ namespace NicaplusApi.Controllers
                 return Unauthorized(
                     new
                     {
-                        mensaje =
-                            "No se pudo identificar al usuario autenticado para registrar la venta de servicio."
+                        mensaje = "No se pudo identificar al usuario autenticado para registrar la venta de servicio."
                     });
             }
 
@@ -583,8 +581,16 @@ namespace NicaplusApi.Controllers
                 return NotFound(
                     new
                     {
-                        mensaje =
-                            "La orden de servicio especificada no existe."
+                        mensaje = "La orden de servicio especificada no existe."
+                    });
+            }
+
+            if (orden.Estado.Equals("Entregado", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(
+                    new
+                    {
+                        mensaje = "La orden de servicio ya fue entregada y liquidada anteriormente."
                     });
             }
 
@@ -592,8 +598,7 @@ namespace NicaplusApi.Controllers
             // TRANSACCIÓN
             // --------------------------------------------------------
 
-            using var transaction =
-                await _context.Database.BeginTransactionAsync();
+            using var transaction = await _context.Database.BeginTransactionAsync();
 
             try
             {
@@ -604,31 +609,22 @@ namespace NicaplusApi.Controllers
                 // ----------------------------------------------------
 
                 orden.Estado = "Entregado";
-
                 orden.FechaEntrega = ahoraNicaragua;
-
-                orden.Notas =
-                    $"[ENTREGA] Herramientas: {dto.HerramientasUsed}. " +
-                    $"Diagnóstico: {dto.DiagnosticoFinal}. " +
-                    $"{orden.Notas}".Trim();
+                orden.Notas = $"[ENTREGA] Herramientas: {dto.HerramientasUsed}. Diagnóstico: {dto.DiagnosticoFinal}. {orden.Notas}".Trim();
 
                 // ----------------------------------------------------
                 // BUSCAR PRODUCTO/SERVICIO TÉCNICO
                 // ----------------------------------------------------
 
                 var productoServicio = await _context.Productos
-                    .FirstOrDefaultAsync(
-                        p =>
-                            p.Id == dto.IdProductoServicio
-                            || p.RequiereServicio);
+                    .FirstOrDefaultAsync(p => p.Id == dto.IdProductoServicio);
 
                 if (productoServicio == null)
                 {
                     return BadRequest(
                         new
                         {
-                            mensaje =
-                                "No se encontró un concepto de 'Servicio Técnico' válido en el catálogo para generar el ingreso contable."
+                            mensaje = "El producto/servicio técnico especificado no existe en el catálogo."
                         });
                 }
 
@@ -639,81 +635,64 @@ namespace NicaplusApi.Controllers
                 var ventaServicio = new Venta
                 {
                     IdUsuario = idUsuarioLogueado,
-
-                    // Puede ser NULL si la orden no tiene cliente
                     IdCliente = orden.IdCliente,
-
                     MetodoPago = dto.MetodoPago,
-
                     FechaVenta = ahoraNicaragua,
-
                     Total = dto.CostoReparacion,
-
                     Detalles = new List<DetalleVenta>
                     {
                         new DetalleVenta
                         {
                             IdProducto = productoServicio.Id,
-
                             Cantidad = 1,
-
-                            PrecioUnitario =
-                                dto.CostoReparacion,
-
-                            SubTotal =
-                                dto.CostoReparacion,
-
-                            MetadataDigital =
-                                $"Taller - Equipo: {orden.Dispositivo} (Orden #{orden.Id})"
+                            PrecioUnitario = dto.CostoReparacion,
+                            SubTotal = dto.CostoReparacion,
+                            MetadataDigital = $"Taller - Equipo: {orden.Dispositivo} (Orden #{orden.Id})"
                         }
                     }
                 };
 
                 _context.Ventas.Add(ventaServicio);
 
-                await _context.SaveChangesAsync();
+                // ----------------------------------------------------
+                // REGISTRAR MOVIMIENTO DE CAJA
+                // ----------------------------------------------------
 
+                var movimientoCaja = new MovimientoCaja
+                {
+                    Fecha = ahoraNicaragua,
+                    Tipo = "Ingreso",
+                    Concepto = "Taller",
+                    Monto = dto.CostoReparacion,
+                    Detalle = $"Liquidación Taller - Orden #{orden.Id} | Equipo: {orden.Dispositivo}",
+                    Venta = ventaServicio
+                };
+
+                _context.MovimientosCaja.Add(movimientoCaja);
+
+                await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
                 // ----------------------------------------------------
                 // WHATSAPP AL ENTREGAR
-                // Solo si existe cliente y teléfono
                 // ----------------------------------------------------
 
-                if (
-                    orden.Cliente != null
-                    &&
-                    !string.IsNullOrWhiteSpace(
-                        orden.Cliente.Telefono))
+                if (orden.Cliente != null && !string.IsNullOrWhiteSpace(orden.Cliente.Telefono))
                 {
-                    var variables =
-                        new Dictionary<string, string>
-                        {
-                            {
-                                "cliente",
-                                orden.Cliente.Nombre
-                            },
-                            {
-                                "factura",
-                                $"#000{ventaServicio.Id}"
-                            },
-                            {
-                                "total",
-                                $"C$ {dto.CostoReparacion:N2}"
-                            },
-                            {
-                                "dispositivo",
-                                orden.Dispositivo
-                            }
-                        };
+                    var variables = new Dictionary<string, string>
+                    {
+                        { "cliente", orden.Cliente.Nombre },
+                        { "factura", $"#000{ventaServicio.Id}" },
+                        { "total", $"C$ {dto.CostoReparacion:N2}" },
+                        { "dispositivo", orden.Dispositivo }
+                    };
 
                     try
                     {
-                        await _whatsappService
-                            .EnviarDesdePlantillaAsync(
-                                "TallerListo",
-                                orden.Cliente.Telefono,
-                                variables);
+                        await _whatsappService.EnviarDesdePlantillaAsync(
+                            "TallerListo",
+                            orden.Cliente.Telefono,
+                            variables);
                     }
                     catch (Exception exWs)
                     {
@@ -727,11 +706,8 @@ namespace NicaplusApi.Controllers
                 return Ok(
                     new
                     {
-                        mensaje =
-                            "Orden de servicio liquidada y entregada con éxito.",
-
+                        mensaje = "Orden de servicio liquidada y entregada con éxito.",
                         ventaId = ventaServicio.Id,
-
                         totalCobrado = ventaServicio.Total
                     });
             }
@@ -748,8 +724,7 @@ namespace NicaplusApi.Controllers
                     500,
                     new
                     {
-                        mensaje =
-                            "Error interno al liquidar y entregar la orden de servicio en caja."
+                        mensaje = "Error interno al liquidar y entregar la orden de servicio en caja."
                     });
             }
         }

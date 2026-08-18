@@ -89,13 +89,15 @@ namespace NicaplusApi.Controllers
                 // 3. Productos con Stock Crítico
                 var stockBajo = await _context.Productos
                     .AsNoTracking()
-                    .Where(p => p.StockActual <= p.StockMinimo)
-                    .OrderBy(p => p.StockActual)
+                    .Include(p => p.Variaciones)
+                    .Where(p => p.ControlaStock && !p.EsDigital && !p.RequiereServicio &&
+                        (!p.TieneVariaciones ? p.StockActual <= p.StockMinimo : p.Variaciones.Any(v => v.StockActual <= v.StockMinimo)))
+                    .OrderBy(p => p.Nombre)
                     .Select(p => new NotificacionStockBajoDto
                     {
                         IdProducto = p.Id,
                         NombreProducto = p.Nombre,
-                        StockActual = p.StockActual,
+                        StockActual = p.TieneVariaciones ? p.Variaciones.Sum(v => v.StockActual) : p.StockActual,
                         StockMinimo = p.StockMinimo,
                         Tipo = "Inventario"
                     })

@@ -33,7 +33,7 @@ namespace NicaplusApi.Controllers
                     .AsNoTracking()
                     .Include(p => p.Categoria)
                     .Include(p => p.Juego)
-                    .Include(p => p.Variaciones) // Carga de la relación uno a muchos
+                    .Include(p => p.Variaciones)
                     .OrderByDescending(p => p.Id)
                     .Select(p => new ProductoAdminResponseDto
                     {
@@ -59,7 +59,6 @@ namespace NicaplusApi.Controllers
                         JuegoId = p.JuegoId,
                         JuegoNombre = p.Juego != null ? p.Juego.Nombre : null,
 
-                        // Soporte para variaciones en la respuesta JSON
                         TieneVariaciones = p.TieneVariaciones,
                         Variaciones = p.Variaciones.Select(v => new VariacionProductoDto
                         {
@@ -269,24 +268,30 @@ namespace NicaplusApi.Controllers
                     TieneVariaciones = dto.TieneVariaciones
                 };
 
-                // Inserción de variaciones asociadas
+                // Inserción de variaciones asociadas (con manejo seguro de nulabilidad)
                 if (dto.TieneVariaciones && dto.Variaciones != null && dto.Variaciones.Any())
                 {
+                    string nombrePrefijo = !string.IsNullOrEmpty(dto.Nombre) && dto.Nombre.Length >= 3 
+                        ? dto.Nombre.Substring(0, 3).ToUpper() 
+                        : (dto.Nombre?.ToUpper() ?? "PRD");
+
                     foreach (var vDto in dto.Variaciones)
                     {
+                        string fallbackNombre = vDto.NombreVariacion ?? "Variación";
+                        
                         producto.Variaciones.Add(new VariacionProducto
                         {
-                            SKU = string.IsNullOrWhiteSpace(vDto.SKU) ? $"{dto.Nombre.Substring(0, Math.Min(3, dto.Nombre.Length)).ToUpper()}-{vDto.NombreVariacion}" : vDto.SKU,
-                            Color = vDto.Color ?? vDto.NombreVariacion,
+                            SKU = string.IsNullOrWhiteSpace(vDto.SKU) ? $"{nombrePrefijo}-{fallbackNombre}" : (vDto.SKU ?? string.Empty),
+                            Color = vDto.Color ?? fallbackNombre,
                             Almacenamiento = vDto.Almacenamiento ?? string.Empty,
                             RAM = vDto.RAM ?? string.Empty,
                             Talla = vDto.Talla ?? string.Empty,
-                            NombreVariacion = vDto.NombreVariacion,
+                            NombreVariacion = fallbackNombre,
                             PrecioVenta = vDto.PrecioVenta > 0 ? vDto.PrecioVenta : dto.PrecioVenta,
                             PrecioCosto = vDto.PrecioCosto > 0 ? vDto.PrecioCosto : dto.PrecioCosto,
                             StockActual = vDto.StockActual,
                             StockMinimo = vDto.StockMinimo > 0 ? vDto.StockMinimo : 2,
-                            ImagenUrl = string.IsNullOrWhiteSpace(vDto.ImagenUrl) ? dto.ImagenUrl : vDto.ImagenUrl,
+                            ImagenUrl = string.IsNullOrWhiteSpace(vDto.ImagenUrl) ? dto.ImagenUrl : (vDto.ImagenUrl ?? string.Empty),
                             Estado = "Activo"
                         });
                     }
@@ -371,15 +376,21 @@ namespace NicaplusApi.Controllers
                     
                     _context.VariacionesProductos.RemoveRange(variacionesAEliminar);
 
+                    string nombrePrefijoUpdate = !string.IsNullOrEmpty(dto.Nombre) && dto.Nombre.Length >= 3 
+                        ? dto.Nombre.Substring(0, 3).ToUpper() 
+                        : (dto.Nombre?.ToUpper() ?? "PRD");
+
                     foreach (var vDto in dto.Variaciones)
                     {
+                        string fallbackNombre = vDto.NombreVariacion ?? "Variación";
+
                         if (vDto.Id > 0)
                         {
                             var vExistente = productoExistente.Variaciones.FirstOrDefault(v => v.Id == vDto.Id);
                             if (vExistente != null)
                             {
-                                vExistente.NombreVariacion = vDto.NombreVariacion;
-                                vExistente.Color = vDto.Color ?? vDto.NombreVariacion;
+                                vExistente.NombreVariacion = fallbackNombre;
+                                vExistente.Color = vDto.Color ?? fallbackNombre;
                                 vExistente.Almacenamiento = vDto.Almacenamiento ?? string.Empty;
                                 vExistente.RAM = vDto.RAM ?? string.Empty;
                                 vExistente.PrecioVenta = vDto.PrecioVenta;
@@ -391,9 +402,9 @@ namespace NicaplusApi.Controllers
                         {
                             productoExistente.Variaciones.Add(new VariacionProducto
                             {
-                                SKU = string.IsNullOrWhiteSpace(vDto.SKU) ? $"{dto.Nombre.Substring(0, Math.Min(3, dto.Nombre.Length)).ToUpper()}-{vDto.NombreVariacion}" : vDto.SKU,
-                                NombreVariacion = vDto.NombreVariacion,
-                                Color = vDto.Color ?? vDto.NombreVariacion,
+                                SKU = string.IsNullOrWhiteSpace(vDto.SKU) ? $"{nombrePrefijoUpdate}-{fallbackNombre}" : (vDto.SKU ?? string.Empty),
+                                NombreVariacion = fallbackNombre,
+                                Color = vDto.Color ?? fallbackNombre,
                                 Almacenamiento = vDto.Almacenamiento ?? string.Empty,
                                 RAM = vDto.RAM ?? string.Empty,
                                 PrecioVenta = vDto.PrecioVenta,
@@ -461,8 +472,9 @@ namespace NicaplusApi.Controllers
 
                 var tieneVentas = await _context.DetallesVentas.AnyAsync(d => d.IdProducto == id);
                 var tieneSuscripciones = await _context.Suscripciones.AnyAsync(s => s.IdProducto == id);
+                var tieneCompras = await _context.DetallesComprasProveedores.AnyAsync(d => d.IdProducto == id);
 
-                if (tieneVentas || tieneSuscripciones)
+                if (tieneVentas || tieneSuscripciones || tieneCompras)
                 {
                     producto.VisibleEnCatalogo = false;
                     producto.Estado = "Pausado";
@@ -470,7 +482,7 @@ namespace NicaplusApi.Controllers
 
                     return Ok(new
                     {
-                        mensaje = "El producto posee registros asociados. Se ha pausado y ocultado del catálogo público para preservar el historial."
+                        mensaje = "El producto posee transacciones o compras asociadas. Se ha pausado y ocultado del catálogo público."
                     });
                 }
 
