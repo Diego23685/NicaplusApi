@@ -499,88 +499,72 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // Priorizar perfiles que la venta ya tenía asignados
-                        var perfilesReutilizables = await _context.PerfilesCuentas
-                            .Where(p => idsPerfilesPropios.Contains(p.Id) && p.IdProducto == prod.Id)
-                            .ToListAsync();
+                        // 🟢 CORRECCIÓN: Buscar la suscripción anterior específica de este detalle de venta para conservar su perfil exacto
+                        var suscripcionAnterior = suscripcionesViejas.FirstOrDefault(s => s.IdProducto == prod.Id && s.IdVenta == id);
+                        
+                        PerfilCuenta? perfilAsignado = null;
 
-                        int faltantes = itemDto.Cantidad - perfilesReutilizables.Count;
-                        List<PerfilCuenta> perfilesDisponibles = new List<PerfilCuenta>(perfilesReutilizables);
-
-                        if (faltantes > 0)
+                        if (suscripcionAnterior != null && suscripcionAnterior.IdPerfilCuenta.HasValue)
                         {
-                            var perfilesNuevos = await _context.PerfilesCuentas
-                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !idsPerfilesPropios.Contains(p.Id))
-                                .Take(faltantes)
-                                .ToListAsync();
-
-                            perfilesDisponibles.AddRange(perfilesNuevos);
-                        }
-                        else if (faltantes < 0)
-                        {
-                            perfilesDisponibles = perfilesDisponibles.Take(itemDto.Cantidad).ToList();
+                            // Reutilizar el mismo perfil que ya tenía asignado esta suscripción
+                            perfilAsignado = await _context.PerfilesCuentas.FindAsync(suscripcionAnterior.IdPerfilCuenta.Value);
                         }
 
-                        if (perfilesDisponibles.Count < itemDto.Cantidad)
+                        if (perfilAsignado == null)
+                        {
+                            // Si es nuevo o no se encuentra, tomar uno disponible del pool
+                            perfilAsignado = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
+                                .FirstOrDefaultAsync();
+                        }
+
+                        if (perfilAsignado == null)
+                        {
                             return BadRequest(new { mensaje = $"No existen suficientes pantallas disponibles para '{prod.Nombre}'." });
-
-                        var metadataList = new List<string>();
-
-                        foreach (var perfil in perfilesDisponibles)
-                        {
-                            perfil.Ocupado = true;
-                            perfil.IdClienteAsignado = idClienteFinal.Value;
-                            perfil.EstadoPerfil = "Asignado";
-                            perfil.FechaAsignacion = ahoraNicaragua;
-                            _context.PerfilesCuentas.Update(perfil);
-
-                            var credencial = $"PERFIL: {perfil.NombrePerfil} | PIN: {perfil.PIN} | Acceso: {perfil.CorreoCuenta} / {perfil.PasswordCuenta}";
-                            metadataList.Add(credencial);
-
-                            int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
-
-                            var suscripcionExistente = await _context.Suscripciones
-                                .FirstOrDefaultAsync(s => s.IdVenta == id 
-                                                    || s.IdPerfilCuenta == perfil.Id 
-                                                    || (s.IdCliente == idClienteFinal.Value 
-                                                        && (s.DetallesCredenciales.Contains(perfil.NombrePerfil) || s.DetallesCredenciales.Contains(perfil.CorreoCuenta))
-                                                        && s.Estado != "Cancelada"));
-
-                            if (suscripcionExistente != null)
-                            {
-                                suscripcionExistente.IdCliente = idClienteFinal.Value;
-                                suscripcionExistente.IdVenta = id;
-                                suscripcionExistente.NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})";
-                                suscripcionExistente.IdProducto = prod.Id;
-                                suscripcionExistente.IdPerfilCuenta = perfil.Id;
-                                suscripcionExistente.CostoRenovacion = itemDto.PrecioUnitario;
-                                suscripcionExistente.FechaVencimiento = ventaOriginal.FechaVenta.AddDays(diasEfectivos);
-                                suscripcionExistente.Estado = "Activa";
-                                suscripcionExistente.DetallesCredenciales = credencial;
-
-                                _context.Suscripciones.Update(suscripcionExistente);
-                            }
-                            else
-                            {
-                                var nuevaSuscripcion = new Suscripcion
-                                {
-                                    IdCliente = idClienteFinal.Value,
-                                    IdVenta = id,
-                                    NombreServicio = $"{prod.Nombre} ({perfil.NombrePerfil})",
-                                    TipoSuscripcion = "Digital",
-                                    IdProducto = prod.Id,
-                                    IdPerfilCuenta = perfil.Id,
-                                    CostoRenovacion = itemDto.PrecioUnitario,
-                                    FechaInicio = ventaOriginal.FechaVenta,
-                                    FechaVencimiento = ventaOriginal.FechaVenta.AddDays(diasEfectivos),
-                                    Estado = "Activa",
-                                    DetallesCredenciales = credencial
-                                };
-                                _context.Suscripciones.Add(nuevaSuscripcion);
-                            }
                         }
 
-                        nuevoDetalle.MetadataDigital = string.Join(" || ", metadataList);
+                        perfilAsignado.Ocupado = true;
+                        perfilAsignado.IdClienteAsignado = idClienteFinal.Value;
+                        perfilAsignado.EstadoPerfil = "Asignado";
+                        perfilAsignado.FechaAsignacion = ventaOriginal.FechaVenta;
+                        _context.PerfilesCuentas.Update(perfilAsignado);
+
+                        var credencial = $"PERFIL: {perfilAsignado.NombrePerfil} | PIN: {perfilAsignado.PIN} | Acceso: {perfilAsignado.CorreoCuenta} / {perfilAsignado.PasswordCuenta}";
+                        nuevoDetalle.MetadataDigital = credencial;
+
+                        int diasEfectivos = ExtraerDiasSuscripcion(itemDto.MetadataDigital, prod.DiasDuracion);
+
+                        if (suscripcionAnterior != null)
+                        {
+                            // Actualizar estrictamente la suscripción ligada a este perfil/venta
+                            suscripcionAnterior.IdCliente = idClienteFinal.Value;
+                            suscripcionAnterior.NombreServicio = $"{prod.Nombre} ({perfilAsignado.NombrePerfil})";
+                            suscripcionAnterior.IdPerfilCuenta = perfilAsignado.Id;
+                            suscripcionAnterior.CostoRenovacion = itemDto.PrecioUnitario;
+                            suscripcionAnterior.FechaVencimiento = ventaOriginal.FechaVenta.AddDays(diasEfectivos);
+                            suscripcionAnterior.Estado = "Activa";
+                            suscripcionAnterior.DetallesCredenciales = credencial;
+
+                            _context.Suscripciones.Update(suscripcionAnterior);
+                        }
+                        else
+                        {
+                            var nuevaSuscripcion = new Suscripcion
+                            {
+                                IdCliente = idClienteFinal.Value,
+                                IdVenta = id,
+                                NombreServicio = $"{prod.Nombre} ({perfilAsignado.NombrePerfil})",
+                                TipoSuscripcion = "Digital",
+                                IdProducto = prod.Id,
+                                IdPerfilCuenta = perfilAsignado.Id,
+                                CostoRenovacion = itemDto.PrecioUnitario,
+                                FechaInicio = ventaOriginal.FechaVenta,
+                                FechaVencimiento = ventaOriginal.FechaVenta.AddDays(diasEfectivos),
+                                Estado = "Activa",
+                                DetallesCredenciales = credencial
+                            };
+                            _context.Suscripciones.Add(nuevaSuscripcion);
+                        }
                     }
 
                     _context.DetallesVentas.Add(nuevoDetalle);
