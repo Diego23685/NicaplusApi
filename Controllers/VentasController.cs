@@ -452,6 +452,7 @@ namespace NicaplusApi.Controllers
                 ventaOriginal.MetodoPago = dto.MetodoPago.Trim();
 
                 decimal nuevoTotalCalculado = 0m;
+                int indiceSuscripcionVieja = 0; // 🟢 Útil para emparejar uno a uno ordenadamente si hay varios del mismo producto
 
                 foreach (var itemDto in dto.Detalles)
                 {
@@ -499,20 +500,25 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // 🟢 CORRECCIÓN: Buscar la suscripción anterior específica de este detalle de venta para conservar su perfil exacto
-                        var suscripcionAnterior = suscripcionesViejas.FirstOrDefault(s => s.IdProducto == prod.Id && s.IdVenta == id);
-                        
+                        // 🟢 CORRECCIÓN: Extraer la suscripción vieja respetando la posición exacta o por coincidencia de producto indexada
+                        Suscripcion? suscripcionAnterior = null;
+                        if (suscripcionesViejas.Count > indiceSuscripcionVieja)
+                        {
+                            suscripcionAnterior = suscripcionesViejas[indiceSuscripcionVieja];
+                            indiceSuscripcionVieja++;
+                        }
+
                         PerfilCuenta? perfilAsignado = null;
 
                         if (suscripcionAnterior != null && suscripcionAnterior.IdPerfilCuenta.HasValue)
                         {
-                            // Reutilizar el mismo perfil que ya tenía asignado esta suscripción
+                            // Reutilizar estrictamente el perfil exacto que ya poseía este renglón
                             perfilAsignado = await _context.PerfilesCuentas.FindAsync(suscripcionAnterior.IdPerfilCuenta.Value);
                         }
 
                         if (perfilAsignado == null)
                         {
-                            // Si es nuevo o no se encuentra, tomar uno disponible del pool
+                            // Si no existe, tomar uno disponible del pool
                             perfilAsignado = await _context.PerfilesCuentas
                                 .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
                                 .FirstOrDefaultAsync();
@@ -536,7 +542,7 @@ namespace NicaplusApi.Controllers
 
                         if (suscripcionAnterior != null)
                         {
-                            // Actualizar estrictamente la suscripción ligada a este perfil/venta
+                            // Actualizar únicamente la suscripción asociada a este perfil específico
                             suscripcionAnterior.IdCliente = idClienteFinal.Value;
                             suscripcionAnterior.NombreServicio = $"{prod.Nombre} ({perfilAsignado.NombrePerfil})";
                             suscripcionAnterior.IdPerfilCuenta = perfilAsignado.Id;
