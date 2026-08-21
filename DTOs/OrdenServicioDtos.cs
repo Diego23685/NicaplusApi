@@ -6,7 +6,7 @@ namespace NicaplusApi.DTOs
     {
         public int? IdCliente { get; set; }
 
-        public int? IdUsuario { get; set; } // Técnico asignado opcional
+        public int? IdUsuario { get; set; }
 
         [Required(ErrorMessage = "El nombre del dispositivo es obligatorio.")]
         [StringLength(100)]
@@ -15,7 +15,27 @@ namespace NicaplusApi.DTOs
         [Required(ErrorMessage = "El diagnóstico o falla inicial es obligatorio.")]
         public string Diagnostico { get; set; } = string.Empty;
 
+        [Range(0, double.MaxValue, ErrorMessage = "El costo estimado no puede ser negativo.")]
+        public decimal CostoEstimado { get; set; } = 0;
+
         public string Notas { get; set; } = string.Empty;
+    }
+
+    public class EditarOrdenServicioDto
+    {
+        public int? IdCliente { get; set; }
+
+        [Required(ErrorMessage = "El nombre del dispositivo es obligatorio.")]
+        [StringLength(100)]
+        public string Dispositivo { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "El diagnóstico es obligatorio.")]
+        public string Diagnostico { get; set; } = string.Empty;
+
+        [Range(0, double.MaxValue, ErrorMessage = "El costo estimado no puede ser negativo.")]
+        public decimal CostoEstimado { get; set; } = 0;
+
+        public string? Notas { get; set; }
     }
 
     public class ActualizarEstadoOrdenDto
@@ -39,7 +59,7 @@ namespace NicaplusApi.DTOs
 
         public string MetodoPago { get; set; } = "Efectivo";
 
-        public int IdProductoServicio { get; set; } = 3;
+        public int IdProductoServicio { get; set; } = 1;
     }
 
     public class OrdenServicioResponseDto
@@ -59,6 +79,8 @@ namespace NicaplusApi.DTOs
         public string Dispositivo { get; set; } = null!;
 
         public string Diagnostico { get; set; } = null!;
+
+        public decimal CostoEstimado { get; set; }
 
         public string Estado { get; set; } = null!;
 

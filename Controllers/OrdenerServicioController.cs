@@ -28,50 +28,29 @@ namespace NicaplusApi.Controllers
             _logger = logger;
         }
 
-        // ============================================================
-        // ZONA HORARIA NICARAGUA
-        // ============================================================
-
         private static TimeZoneInfo GetNicaraguaTimeZone()
         {
             try
             {
-                return TimeZoneInfo.FindSystemTimeZoneById(
-                    "Central America Standard Time");
+                return TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
             }
             catch (TimeZoneNotFoundException)
             {
-                return TimeZoneInfo.FindSystemTimeZoneById(
-                    "America/Managua");
+                return TimeZoneInfo.FindSystemTimeZoneById("America/Managua");
             }
         }
 
         private DateTime GetNicaraguaTime()
         {
-            return TimeZoneInfo.ConvertTimeFromUtc(
-                DateTime.UtcNow,
-                GetNicaraguaTimeZone());
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, GetNicaraguaTimeZone());
         }
-
-        // ============================================================
-        // OBTENER ID DEL USUARIO AUTENTICADO
-        // ============================================================
 
         private bool TryGetUserId(out int userId)
         {
             userId = 0;
-
-            var claimValue =
-                User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            return !string.IsNullOrEmpty(claimValue)
-                && int.TryParse(claimValue, out userId);
+            var claimValue = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            return !string.IsNullOrEmpty(claimValue) && int.TryParse(claimValue, out userId);
         }
-
-        // ============================================================
-        // GET: api/OrdenesServicio
-        // Obtener todas las órdenes
-        // ============================================================
 
         [HttpGet]
         public async Task<IActionResult> GetOrdenes()
@@ -86,34 +65,17 @@ namespace NicaplusApi.Controllers
                     .Select(o => new OrdenServicioResponseDto
                     {
                         Id = o.Id,
-
-                        // Cliente opcional
                         IdCliente = o.IdCliente,
-
-                        ClienteNombre = o.Cliente != null
-                            ? o.Cliente.Nombre
-                            : "Cliente no identificado",
-
-                        ClienteTelefono = o.Cliente != null
-                            ? o.Cliente.Telefono
-                            : string.Empty,
-
+                        ClienteNombre = o.Cliente != null ? o.Cliente.Nombre : "Cliente no identificado",
+                        ClienteTelefono = o.Cliente != null ? o.Cliente.Telefono : string.Empty,
                         IdUsuario = o.IdUsuario,
-
-                        TecnicoNombre = o.Tecnico != null
-                            ? o.Tecnico.Nombre
-                            : "Sin asignar",
-
+                        TecnicoNombre = o.Tecnico != null ? o.Tecnico.Nombre : "Sin asignar",
                         Dispositivo = o.Dispositivo,
-
                         Diagnostico = o.Diagnostico,
-
+                        CostoEstimado = o.CostoEstimado,
                         Estado = o.Estado,
-
                         FechaIngreso = o.FechaIngreso,
-
                         FechaEntrega = o.FechaEntrega,
-
                         Notas = o.Notas
                     })
                     .ToListAsync();
@@ -122,24 +84,10 @@ namespace NicaplusApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Error al consultar las órdenes de servicio del taller.");
-
-                return StatusCode(
-                    500,
-                    new
-                    {
-                        mensaje =
-                            "Error interno al obtener las órdenes de servicio."
-                    });
+                _logger.LogError(ex, "Error al consultar las órdenes de servicio del taller.");
+                return StatusCode(500, new { mensaje = "Error interno al obtener las órdenes de servicio." });
             }
         }
-
-        // ============================================================
-        // GET: api/OrdenesServicio/5
-        // Obtener una orden específica
-        // ============================================================
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(int id)
@@ -154,45 +102,23 @@ namespace NicaplusApi.Controllers
 
                 if (orden == null)
                 {
-                    return NotFound(
-                        new
-                        {
-                            mensaje =
-                                "La orden de servicio especificada no existe."
-                        });
+                    return NotFound(new { mensaje = "La orden de servicio especificada no existe." });
                 }
 
                 var response = new OrdenServicioResponseDto
                 {
                     Id = orden.Id,
-
-                    // Cliente opcional
                     IdCliente = orden.IdCliente,
-
-                    ClienteNombre = orden.Cliente != null
-                        ? orden.Cliente.Nombre
-                        : "Cliente no identificado",
-
-                    ClienteTelefono = orden.Cliente != null
-                        ? orden.Cliente.Telefono
-                        : string.Empty,
-
+                    ClienteNombre = orden.Cliente != null ? orden.Cliente.Nombre : "Cliente no identificado",
+                    ClienteTelefono = orden.Cliente != null ? orden.Cliente.Telefono : string.Empty,
                     IdUsuario = orden.IdUsuario,
-
-                    TecnicoNombre = orden.Tecnico != null
-                        ? orden.Tecnico.Nombre
-                        : "Sin asignar",
-
+                    TecnicoNombre = orden.Tecnico != null ? orden.Tecnico.Nombre : "Sin asignar",
                     Dispositivo = orden.Dispositivo,
-
                     Diagnostico = orden.Diagnostico,
-
+                    CostoEstimado = orden.CostoEstimado,
                     Estado = orden.Estado,
-
                     FechaIngreso = orden.FechaIngreso,
-
                     FechaEntrega = orden.FechaEntrega,
-
                     Notas = orden.Notas
                 };
 
@@ -200,212 +126,143 @@ namespace NicaplusApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Error al consultar la orden de servicio ID {Id}",
-                    id);
-
-                return StatusCode(
-                    500,
-                    new
-                    {
-                        mensaje =
-                            "Error interno al consultar la orden de servicio."
-                    });
+                _logger.LogError(ex, "Error al consultar la orden de servicio ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al consultar la orden de servicio." });
             }
         }
 
-        // ============================================================
-        // POST: api/OrdenesServicio
-        // Crear una orden de servicio
-        // ============================================================
-
         [HttpPost]
-        public async Task<IActionResult> CrearOrden(
-            [FromBody] CrearOrdenServicioDto dto)
+        public async Task<IActionResult> CrearOrden([FromBody] CrearOrdenServicioDto dto)
         {
             if (!ModelState.IsValid)
             {
-                return BadRequest(
-                    new
-                    {
-                        mensaje =
-                            "Datos de la orden de servicio inválidos.",
-                        detalles = ModelState
-                    });
+                return BadRequest(new { mensaje = "Datos de la orden de servicio inválidos.", detalles = ModelState });
             }
 
             try
             {
-                // ----------------------------------------------------
-                // CLIENTE OPCIONAL
-                // ----------------------------------------------------
-
                 Cliente? cliente = null;
-
                 if (dto.IdCliente.HasValue)
                 {
-                    cliente = await _context.Clientes
-                        .FindAsync(dto.IdCliente.Value);
-
+                    cliente = await _context.Clientes.FindAsync(dto.IdCliente.Value);
                     if (cliente == null)
                     {
-                        return BadRequest(
-                            new
-                            {
-                                mensaje =
-                                    "El cliente especificado no existe."
-                            });
+                        return BadRequest(new { mensaje = "El cliente especificado no existe." });
                     }
                 }
-
-                // ----------------------------------------------------
-                // TÉCNICO OPCIONAL
-                // ----------------------------------------------------
 
                 Usuario? tecnico = null;
-
                 if (dto.IdUsuario.HasValue)
                 {
-                    tecnico = await _context.Usuarios
-                        .FindAsync(dto.IdUsuario.Value);
-
+                    tecnico = await _context.Usuarios.FindAsync(dto.IdUsuario.Value);
                     if (tecnico == null)
                     {
-                        return BadRequest(
-                            new
-                            {
-                                mensaje =
-                                    "El técnico asignado especificado no existe."
-                            });
+                        return BadRequest(new { mensaje = "El técnico asignado especificado no existe." });
                     }
                 }
-
-                // ----------------------------------------------------
-                // CREAR ORDEN
-                // ----------------------------------------------------
 
                 var orden = new OrdenServicio
                 {
                     IdCliente = dto.IdCliente,
-
                     IdUsuario = dto.IdUsuario,
-
                     Dispositivo = dto.Dispositivo.Trim(),
-
                     Diagnostico = dto.Diagnostico.Trim(),
-
+                    CostoEstimado = dto.CostoEstimado,
                     Estado = "Recibido",
-
                     FechaIngreso = GetNicaraguaTime(),
-
                     Notas = dto.Notas?.Trim() ?? string.Empty
                 };
 
                 _context.OrdenesServicio.Add(orden);
-
                 await _context.SaveChangesAsync();
-
-                // ----------------------------------------------------
-                // RESPONSE
-                // ----------------------------------------------------
 
                 var response = new OrdenServicioResponseDto
                 {
                     Id = orden.Id,
-
                     IdCliente = orden.IdCliente,
-
-                    ClienteNombre = cliente?.Nombre
-                        ?? "Cliente no identificado",
-
-                    ClienteTelefono = cliente?.Telefono
-                        ?? string.Empty,
-
+                    ClienteNombre = cliente?.Nombre ?? "Cliente no identificado",
+                    ClienteTelefono = cliente?.Telefono ?? string.Empty,
                     IdUsuario = orden.IdUsuario,
-
-                    TecnicoNombre = tecnico?.Nombre
-                        ?? "Sin asignar",
-
+                    TecnicoNombre = tecnico?.Nombre ?? "Sin asignar",
                     Dispositivo = orden.Dispositivo,
-
                     Diagnostico = orden.Diagnostico,
-
+                    CostoEstimado = orden.CostoEstimado,
                     Estado = orden.Estado,
-
                     FechaIngreso = orden.FechaIngreso,
-
                     FechaEntrega = orden.FechaEntrega,
-
                     Notas = orden.Notas
                 };
 
-                return CreatedAtAction(
-                    nameof(GetById),
-                    new { id = orden.Id },
-                    new
-                    {
-                        mensaje =
-                            "Orden de servicio registrada correctamente.",
-
-                        orden = response
-                    });
+                return CreatedAtAction(nameof(GetById), new { id = orden.Id }, new { mensaje = "Orden de servicio registrada correctamente.", orden = response });
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Error al registrar una nueva orden de servicio.");
-
-                return StatusCode(
-                    500,
-                    new
-                    {
-                        mensaje =
-                            "Error interno al guardar la orden de servicio."
-                    });
+                _logger.LogError(ex, "Error al registrar una nueva orden de servicio.");
+                return StatusCode(500, new { mensaje = "Error interno al guardar la orden de servicio." });
             }
         }
 
-        // ============================================================
-        // PUT: api/OrdenesServicio/5/estado
-        // Actualizar estado
-        // ============================================================
-
-        [HttpPut("{id}/estado")]
-        public async Task<IActionResult> ActualizarEstado(
-            int id,
-            [FromBody] ActualizarEstadoOrdenDto dto)
+        [HttpPut("{id}")]
+        public async Task<IActionResult> EditarOrden(int id, [FromBody] EditarOrdenServicioDto dto)
         {
             if (!ModelState.IsValid)
             {
-                return BadRequest(
-                    new
-                    {
-                        mensaje =
-                            "Datos incompletos para actualizar el estado.",
-                        detalles = ModelState
-                    });
+                return BadRequest(new { mensaje = "Datos de edición inválidos.", detalles = ModelState });
             }
 
-            var estadosValidos = new[]
+            try
             {
-                "Recibido",
-                "En Revisión",
-                "Listo",
-                "Entregado"
-            };
+                var orden = await _context.OrdenesServicio.FirstOrDefaultAsync(o => o.Id == id);
+                if (orden == null)
+                {
+                    return NotFound(new { mensaje = "La orden de servicio especificada no existe." });
+                }
 
-            if (!estadosValidos.Contains(
-                    dto.NuevoEstado,
-                    StringComparer.OrdinalIgnoreCase))
-            {
-                return BadRequest(
-                    new
+                if (orden.Estado.Equals("Entregado", StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new { mensaje = "No se pueden modificar órdenes que ya han sido entregadas y facturadas." });
+                }
+
+                if (dto.IdCliente.HasValue)
+                {
+                    var existeCliente = await _context.Clientes.AnyAsync(c => c.Id == dto.IdCliente.Value);
+                    if (!existeCliente)
                     {
-                        mensaje =
-                            $"Estado no válido. Los estados permitidos son: {string.Join(", ", estadosValidos)}"
-                    });
+                        return BadRequest(new { mensaje = "El cliente seleccionado no existe." });
+                    }
+                }
+
+                orden.IdCliente = dto.IdCliente;
+                orden.Dispositivo = dto.Dispositivo.Trim();
+                orden.Diagnostico = dto.Diagnostico.Trim();
+                orden.CostoEstimado = dto.CostoEstimado;
+                if (dto.Notas != null)
+                {
+                    orden.Notas = dto.Notas.Trim();
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { mensaje = "Orden de taller modificada con éxito." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al editar la orden de servicio ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al actualizar la orden de servicio." });
+            }
+        }
+
+        [HttpPut("{id}/estado")]
+        public async Task<IActionResult> ActualizarEstado(int id, [FromBody] ActualizarEstadoOrdenDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new { mensaje = "Datos incompletos para actualizar el estado.", detalles = ModelState });
+            }
+
+            var estadosValidos = new[] { "Recibido", "En Revisión", "Listo", "Entregado" };
+            if (!estadosValidos.Contains(dto.NuevoEstado, StringComparer.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { mensaje = $"Estado no válido. Los estados permitidos son: {string.Join(", ", estadosValidos)}" });
             }
 
             try
@@ -416,161 +273,74 @@ namespace NicaplusApi.Controllers
 
                 if (orden == null)
                 {
-                    return NotFound(
-                        new
-                        {
-                            mensaje =
-                                "La orden de servicio especificada no existe."
-                        });
+                    return NotFound(new { mensaje = "La orden de servicio especificada no existe." });
                 }
 
                 string estadoAnterior = orden.Estado;
-
                 orden.Estado = dto.NuevoEstado;
-
-                // ----------------------------------------------------
-                // AGREGAR NOTAS
-                // ----------------------------------------------------
 
                 if (!string.IsNullOrWhiteSpace(dto.Notas))
                 {
-                    orden.Notas =
-                        string.IsNullOrWhiteSpace(orden.Notas)
-                            ? dto.Notas.Trim()
-                            : $"{orden.Notas} | {dto.Notas.Trim()}";
+                    orden.Notas = string.IsNullOrWhiteSpace(orden.Notas)
+                        ? dto.Notas.Trim()
+                        : $"{orden.Notas} | {dto.Notas.Trim()}";
                 }
 
-                // ----------------------------------------------------
-                // FECHA DE ENTREGA
-                // ----------------------------------------------------
-
-                if (dto.NuevoEstado.Equals(
-                        "Entregado",
-                        StringComparison.OrdinalIgnoreCase))
+                if (dto.NuevoEstado.Equals("Entregado", StringComparison.OrdinalIgnoreCase))
                 {
                     orden.FechaEntrega = GetNicaraguaTime();
                 }
 
                 await _context.SaveChangesAsync();
 
-                // ----------------------------------------------------
-                // WHATSAPP CUANDO ESTÁ LISTO
-                // Solo si existe cliente y teléfono
-                // ----------------------------------------------------
-
-                if (
-                    dto.NuevoEstado.Equals(
-                        "Listo",
-                        StringComparison.OrdinalIgnoreCase)
-                    &&
-                    !estadoAnterior.Equals(
-                        "Listo",
-                        StringComparison.OrdinalIgnoreCase)
-                    &&
-                    orden.Cliente != null
-                    &&
-                    !string.IsNullOrWhiteSpace(
-                        orden.Cliente.Telefono)
-                )
+                if (dto.NuevoEstado.Equals("Listo", StringComparison.OrdinalIgnoreCase)
+                    && !estadoAnterior.Equals("Listo", StringComparison.OrdinalIgnoreCase)
+                    && orden.Cliente != null
+                    && !string.IsNullOrWhiteSpace(orden.Cliente.Telefono))
                 {
-                    var variables =
-                        new Dictionary<string, string>
-                        {
-                            {
-                                "cliente",
-                                orden.Cliente.Nombre
-                            },
-                            {
-                                "dispositivo",
-                                orden.Dispositivo
-                            },
-                            {
-                                "id",
-                                orden.Id.ToString()
-                            }
-                        };
+                    var variables = new Dictionary<string, string>
+                    {
+                        { "cliente", orden.Cliente.Nombre },
+                        { "dispositivo", orden.Dispositivo },
+                        { "id", orden.Id.ToString() }
+                    };
 
                     try
                     {
-                        await _whatsappService
-                            .EnviarDesdePlantillaAsync(
-                                "EnvioComprobante",
-                                orden.Cliente.Telefono,
-                                variables);
+                        await _whatsappService.EnviarDesdePlantillaAsync("EnvioComprobante", orden.Cliente.Telefono, variables);
                     }
                     catch (Exception exWs)
                     {
-                        _logger.LogWarning(
-                            exWs,
-                            "No se pudo enviar la notificación de WhatsApp para la orden ID {Id}",
-                            orden.Id);
+                        _logger.LogWarning(exWs, "No se pudo enviar la notificación de WhatsApp para la orden ID {Id}", orden.Id);
                     }
                 }
 
-                return Ok(
-                    new
-                    {
-                        mensaje =
-                            $"Estado de la orden #{orden.Id} actualizado a '{orden.Estado}'.",
-
-                        estadoActual = orden.Estado,
-
-                        fechaEntrega = orden.FechaEntrega
-                    });
+                return Ok(new
+                {
+                    mensaje = $"Estado de la orden #{orden.Id} actualizado a '{orden.Estado}'.",
+                    estadoActual = orden.Estado,
+                    fechaEntrega = orden.FechaEntrega
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Error al actualizar el estado de la orden de servicio ID {Id}",
-                    id);
-
-                return StatusCode(
-                    500,
-                    new
-                    {
-                        mensaje =
-                            "Error interno al actualizar el estado de la orden."
-                    });
+                _logger.LogError(ex, "Error al actualizar el estado de la orden de servicio ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al actualizar el estado de la orden." });
             }
         }
 
-        // ============================================================
-        // PUT: api/OrdenesServicio/5/entregar
-        // Entregar equipo y registrar servicio
-        // ============================================================
-
         [HttpPut("{id}/entregar")]
-        public async Task<IActionResult> EntregarEquipo(
-            int id,
-            [FromBody] EntregaOrdenDto dto)
+        public async Task<IActionResult> EntregarEquipo(int id, [FromBody] EntregaOrdenDto dto)
         {
             if (!ModelState.IsValid)
             {
-                return BadRequest(
-                    new
-                    {
-                        mensaje = "Datos de entrega inválidos.",
-                        detalles = ModelState
-                    });
+                return BadRequest(new { mensaje = "Datos de entrega inválidos.", detalles = ModelState });
             }
-
-            // --------------------------------------------------------
-            // USUARIO AUTENTICADO
-            // --------------------------------------------------------
 
             if (!TryGetUserId(out int idUsuarioLogueado))
             {
-                return Unauthorized(
-                    new
-                    {
-                        mensaje = "No se pudo identificar al usuario autenticado para registrar la venta de servicio."
-                    });
+                return Unauthorized(new { mensaje = "No se pudo identificar al usuario autenticado para registrar la venta de servicio." });
             }
-
-            // --------------------------------------------------------
-            // BUSCAR ORDEN
-            // --------------------------------------------------------
 
             var orden = await _context.OrdenesServicio
                 .Include(o => o.Cliente)
@@ -578,25 +348,13 @@ namespace NicaplusApi.Controllers
 
             if (orden == null)
             {
-                return NotFound(
-                    new
-                    {
-                        mensaje = "La orden de servicio especificada no existe."
-                    });
+                return NotFound(new { mensaje = "La orden de servicio especificada no existe." });
             }
 
             if (orden.Estado.Equals("Entregado", StringComparison.OrdinalIgnoreCase))
             {
-                return BadRequest(
-                    new
-                    {
-                        mensaje = "La orden de servicio ya fue entregada y liquidada anteriormente."
-                    });
+                return BadRequest(new { mensaje = "La orden de servicio ya fue entregada y liquidada anteriormente." });
             }
-
-            // --------------------------------------------------------
-            // TRANSACCIÓN
-            // --------------------------------------------------------
 
             using var transaction = await _context.Database.BeginTransactionAsync();
 
@@ -604,33 +362,15 @@ namespace NicaplusApi.Controllers
             {
                 var ahoraNicaragua = GetNicaraguaTime();
 
-                // ----------------------------------------------------
-                // ACTUALIZAR ORDEN
-                // ----------------------------------------------------
-
                 orden.Estado = "Entregado";
                 orden.FechaEntrega = ahoraNicaragua;
                 orden.Notas = $"[ENTREGA] Herramientas: {dto.HerramientasUsed}. Diagnóstico: {dto.DiagnosticoFinal}. {orden.Notas}".Trim();
 
-                // ----------------------------------------------------
-                // BUSCAR PRODUCTO/SERVICIO TÉCNICO
-                // ----------------------------------------------------
-
-                var productoServicio = await _context.Productos
-                    .FirstOrDefaultAsync(p => p.Id == dto.IdProductoServicio);
-
+                var productoServicio = await _context.Productos.FirstOrDefaultAsync(p => p.Id == dto.IdProductoServicio);
                 if (productoServicio == null)
                 {
-                    return BadRequest(
-                        new
-                        {
-                            mensaje = "El producto/servicio técnico especificado no existe en el catálogo."
-                        });
+                    return BadRequest(new { mensaje = "El producto/servicio técnico especificado no existe en el catálogo." });
                 }
-
-                // ----------------------------------------------------
-                // CREAR VENTA
-                // ----------------------------------------------------
 
                 var ventaServicio = new Venta
                 {
@@ -654,10 +394,6 @@ namespace NicaplusApi.Controllers
 
                 _context.Ventas.Add(ventaServicio);
 
-                // ----------------------------------------------------
-                // REGISTRAR MOVIMIENTO DE CAJA
-                // ----------------------------------------------------
-
                 var movimientoCaja = new MovimientoCaja
                 {
                     Fecha = ahoraNicaragua,
@@ -673,10 +409,6 @@ namespace NicaplusApi.Controllers
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                // ----------------------------------------------------
-                // WHATSAPP AL ENTREGAR
-                // ----------------------------------------------------
-
                 if (orden.Cliente != null && !string.IsNullOrWhiteSpace(orden.Cliente.Telefono))
                 {
                     var variables = new Dictionary<string, string>
@@ -689,43 +421,26 @@ namespace NicaplusApi.Controllers
 
                     try
                     {
-                        await _whatsappService.EnviarDesdePlantillaAsync(
-                            "TallerListo",
-                            orden.Cliente.Telefono,
-                            variables);
+                        await _whatsappService.EnviarDesdePlantillaAsync("TallerListo", orden.Cliente.Telefono, variables);
                     }
                     catch (Exception exWs)
                     {
-                        _logger.LogWarning(
-                            exWs,
-                            "Error al enviar la plantilla 'TallerListo' para la orden #{Id}",
-                            orden.Id);
+                        _logger.LogWarning(exWs, "Error al enviar la plantilla 'TallerListo' para la orden #{Id}", orden.Id);
                     }
                 }
 
-                return Ok(
-                    new
-                    {
-                        mensaje = "Orden de servicio liquidada y entregada con éxito.",
-                        ventaId = ventaServicio.Id,
-                        totalCobrado = ventaServicio.Total
-                    });
+                return Ok(new
+                {
+                    mensaje = "Orden de servicio liquidada y entregada con éxito.",
+                    ventaId = ventaServicio.Id,
+                    totalCobrado = ventaServicio.Total
+                });
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-
-                _logger.LogError(
-                    ex,
-                    "Error crítico al liquidar y entregar la orden de servicio ID {Id}",
-                    id);
-
-                return StatusCode(
-                    500,
-                    new
-                    {
-                        mensaje = "Error interno al liquidar y entregar la orden de servicio en caja."
-                    });
+                _logger.LogError(ex, "Error crítico al liquidar y entregar la orden de servicio ID {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al liquidar y entregar la orden de servicio en caja." });
             }
         }
     }

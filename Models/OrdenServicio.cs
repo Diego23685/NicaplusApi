@@ -19,6 +19,9 @@ namespace NicaplusApi.Models
         [Required]
         public string Diagnostico { get; set; } = string.Empty;
 
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal CostoEstimado { get; set; } = 0;
+
         [Required]
         [StringLength(50)]
         public string Estado { get; set; } = "Recibido";
