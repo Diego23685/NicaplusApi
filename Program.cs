@@ -8,13 +8,10 @@ using NicaplusApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Servicios Básicos
+// 1. Servicios
 builder.Services.AddHttpContextAccessor();
-
 builder.Services.AddHttpClient<IWhatsAppService, WhatsAppService>();
-
 builder.Services.AddHttpClient<IEmailService, EmailService>();
-
 builder.Services.AddScoped<JwtService>();
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -30,10 +27,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = new SymmetricSecurityKey(
                 Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)
             ),
-
             ValidateIssuer = true,
             ValidateAudience = true,
-
             ValidIssuer = builder.Configuration["Jwt:Issuer"],
             ValidAudience = builder.Configuration["Jwt:Audience"]
         };
@@ -42,20 +37,19 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddControllers().AddJsonOptions(options =>
     options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles);
 
-// 2. CORS Único (Para evitar conflictos)
-// 2. CORS Ajustado para múltiples orígenes (Admin y Catálogo Público)
+// 2. CORS
 builder.Services.AddCors(options => 
 {
     options.AddPolicy("PermitirTodo", policy =>
     {
         policy.WithOrigins(
                   "https://administration.nicaplusgaming.online", 
-                  "https://www.nicaplusgaming.online", // ◄ Agregamos el catálogo de clientes
-                  "http://localhost:5173", // ◄ Agregamos el origen de la aplicación frontend
-                  "http://administration.localhost:5173", // ◄ Agregamos el origen de la aplicación frontend para administración
+                  "https://www.nicaplusgaming.online", 
+                  "http://localhost:5173", 
+                  "http://administration.localhost:5173", 
                   "https://nicaplus-web-git-mobile-version-nicaplus-gaming.vercel.app",
                   "http://localhost",
-                  "https://localhost"// ◄ Agregamos el origen de la aplicación frontend para administración
+                  "https://localhost"
               )
               .AllowAnyHeader()
               .AllowAnyMethod()
@@ -63,7 +57,7 @@ builder.Services.AddCors(options =>
     });
 });
 
-// 3. Swagger con Seguridad JWT
+// 3. Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -92,11 +86,16 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// 4. Middlewares (El orden importa)
-app.UseCors("PermitirTodo"); // Activar CORS antes de autenticación
+// 4. Middlewares (Pipeline)
+app.UseCors("PermitirTodo");
 
-app.UseSwagger();
-app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Nicaplus ERP API V1"));
+app.UseStaticFiles();
+
+if (app.Environment.IsDevelopment() || true) // Ajustar según si quieres Swagger público en prod
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Nicaplus ERP API V1"));
+}
 
 app.UseAuthentication();
 app.UseAuthorization();
