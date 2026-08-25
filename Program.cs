@@ -5,6 +5,7 @@ using NicaplusApi.Data;
 using System.Text;
 using Microsoft.OpenApi.Models;
 using NicaplusApi.Services;
+using Microsoft.Extensions.FileProviders; // <-- Necesario para PhysicalFileProvider
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -89,9 +90,22 @@ var app = builder.Build();
 // 4. Middlewares (Pipeline)
 app.UseCors("PermitirTodo");
 
-app.UseStaticFiles();
+// Mapeo físico directo a wwwroot/uploads
+var uploadsPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads");
+if (!Directory.Exists(uploadsPath))
+{
+    Directory.CreateDirectory(uploadsPath);
+}
 
-if (app.Environment.IsDevelopment() || true) // Ajustar según si quieres Swagger público en prod
+app.UseStaticFiles(); // Servir estáticos de wwwroot por defecto
+
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(uploadsPath),
+    RequestPath = "/uploads"
+});
+
+if (app.Environment.IsDevelopment() || true)
 {
     app.UseSwagger();
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Nicaplus ERP API V1"));
