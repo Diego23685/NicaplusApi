@@ -497,5 +497,46 @@ namespace NicaplusApi.Controllers
                 return StatusCode(500, new { mensaje = "Error interno al intentar eliminar el producto." });
             }
         }
+
+        // GET: api/Products/5/historial-ventas
+        [HttpGet("{id}/historial-ventas")]
+        [Authorize]
+        public async Task<IActionResult> GetHistorialVentasProducto(int id)
+        {
+            try
+            {
+                var productoExiste = await _context.Productos.AnyAsync(p => p.Id == id);
+                if (!productoExiste)
+                {
+                    return NotFound(new { mensaje = "El producto no existe." });
+                }
+
+                var historial = await _context.DetallesVentas
+                    .AsNoTracking()
+                    .Where(d => d.IdProducto == id && d.Venta != null)
+                    .OrderByDescending(d => d.Venta!.FechaVenta)
+                    .Select(d => new
+                    {
+                        VentaId = d.IdVenta,
+                        Fecha = d.Venta!.FechaVenta.ToString("yyyy-MM-dd HH:mm"),
+                        ClienteId = d.Venta.IdCliente,
+                        ClienteNombre = d.Venta.Cliente != null ? d.Venta.Cliente.Nombre : "Mostrador General",
+                        ClienteTelefono = d.Venta.Cliente != null ? d.Venta.Cliente.Telefono : "N/A",
+                        Cantidad = d.Cantidad,
+                        PrecioUnitario = d.PrecioUnitario,
+                        SubTotal = d.SubTotal,
+                        MetodoPago = d.Venta.MetodoPago,
+                        Operador = d.Venta.Usuario != null ? d.Venta.Usuario.Nombre : "Sistema"
+                    })
+                    .ToListAsync();
+
+                return Ok(historial);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al obtener historial de ventas del producto {Id}", id);
+                return StatusCode(500, new { mensaje = "Error interno al consultar el historial." });
+            }
+        }
     }
 }
