@@ -50,7 +50,8 @@ builder.Services.AddCors(options =>
                   "http://administration.localhost:5173", 
                   "https://nicaplus-web-git-mobile-version-nicaplus-gaming.vercel.app",
                   "http://localhost",
-                  "https://localhost"
+                  "https://localhost",
+                  "https://mobileadmin.nicaplusgaming.online/"
               )
               .AllowAnyHeader()
               .AllowAnyMethod()
