@@ -22,81 +22,116 @@ namespace NicaplusApi.Controllers
             _logger = logger;
         }
 
-        // 1. GET: api/Products (Panel de Administración y Caja POS con Variaciones)
+        // 1. GET: api/Products (Panel de Administración y Caja POS)
         [HttpGet]
         [Authorize]
         public async Task<IActionResult> GetProductos()
         {
             try
             {
+                var stockPerfilesPool = await _context.PerfilesCuentas
+                    .AsNoTracking()
+                    .Where(pc => !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                    .GroupBy(pc => pc.IdProducto)
+                    .Select(g => new { IdProducto = g.Key, TotalDisponibles = g.Count() })
+                    .ToDictionaryAsync(x => x.IdProducto, x => x.TotalDisponibles);
+
+                var stockCodigosPool = await _context.CodigosDigitales
+                    .AsNoTracking()
+                    .Where(c => !c.Vendido && c.Estado == "Disponible")
+                    .GroupBy(c => c.IdProducto)
+                    .Select(g => new { IdProducto = g.Key, TotalDisponibles = g.Count() })
+                    .ToDictionaryAsync(x => x.IdProducto, x => x.TotalDisponibles);
+
                 var productos = await _context.Productos
                     .AsNoTracking()
                     .Include(p => p.Categoria)
                     .Include(p => p.Juego)
                     .Include(p => p.Variaciones)
                     .OrderByDescending(p => p.Id)
-                    .Select(p => new ProductoAdminResponseDto
-                    {
-                        Id = p.Id,
-                        Nombre = p.Nombre,
-                        Descripcion = p.Descripcion,
-                        PrecioVenta = p.PrecioVenta,
-                        PrecioCosto = p.PrecioCosto,
-                        StockActual = p.StockActual,
-                        StockMinimo = p.StockMinimo,
-                        ImagenUrl = p.ImagenUrl,
-                        EsDigital = p.EsDigital,
-                        ControlaStock = p.ControlaStock,
-                        RequiereServicio = p.RequiereServicio,
-                        VisibleEnCatalogo = p.VisibleEnCatalogo,
-                        EsSuscripcion = p.EsSuscripcion,
-                        DiasDuracion = p.DiasDuracion,
-                        GarantiaDias = p.GarantiaDias,
-                        Proveedor = p.Proveedor,
-                        Estado = p.Estado,
-                        CategoriaId = p.CategoriaId,
-                        CategoriaNombre = p.Categoria != null ? p.Categoria.Nombre : null,
-                        JuegoId = p.JuegoId,
-                        JuegoNombre = p.Juego != null ? p.Juego.Nombre : null,
-
-                        TieneVariaciones = p.TieneVariaciones,
-                        Variaciones = p.Variaciones.Select(v => new VariacionProductoDto
-                        {
-                            Id = v.Id,
-                            ProductoPadreId = v.ProductoPadreId,
-                            SKU = v.SKU,
-                            Color = v.Color,
-                            Almacenamiento = v.Almacenamiento,
-                            RAM = v.RAM,
-                            Talla = v.Talla,
-                            NombreVariacion = v.NombreVariacion,
-                            PrecioVenta = v.PrecioVenta,
-                            PrecioCosto = v.PrecioCosto,
-                            StockActual = v.StockActual,
-                            StockMinimo = v.StockMinimo,
-                            ImagenUrl = v.ImagenUrl,
-                            Estado = v.Estado
-                        }).ToList(),
-
-                        PrimerPerfilId = p.EsDigital
-                            ? _context.PerfilesCuentas
-                                .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
-                                .OrderBy(pc => pc.Id)
-                                .Select(pc => (int?)pc.Id)
-                                .FirstOrDefault()
-                            : null,
-
-                        MetadataDigital = p.EsDigital 
-                            ? _context.PerfilesCuentas
-                                .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
-                                .OrderBy(pc => pc.Id)
-                                .Select(pc => $"Perfil: {pc.NombrePerfil} | Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}")
-                                .FirstOrDefault()
-                            : null
-                    })
                     .ToListAsync();
 
-                return Ok(productos);
+                var respuesta = productos.Select(p => new ProductoAdminResponseDto
+                {
+                    Id = p.Id,
+                    Nombre = p.Nombre,
+                    Descripcion = p.Descripcion,
+                    PrecioVenta = p.PrecioVenta,
+                    PrecioCosto = p.PrecioCosto,
+                    StockMinimo = p.StockMinimo,
+                    ImagenUrl = p.ImagenUrl,
+                    EsDigital = p.EsDigital,
+                    EsCodigoDigital = p.EsCodigoDigital,
+                    ControlaStock = p.ControlaStock,
+                    RequiereServicio = p.RequiereServicio,
+                    VisibleEnCatalogo = p.VisibleEnCatalogo,
+                    EsSuscripcion = p.EsSuscripcion,
+                    DiasDuracion = p.DiasDuracion,
+                    GarantiaDias = p.GarantiaDias,
+                    Proveedor = p.Proveedor,
+                    Estado = p.Estado,
+                    CategoriaId = p.CategoriaId,
+                    CategoriaNombre = p.Categoria?.Nombre,
+                    JuegoId = p.JuegoId,
+                    JuegoNombre = p.Juego?.Nombre,
+
+                    TieneVariaciones = p.TieneVariaciones,
+                    Variaciones = p.Variaciones.Select(v => new VariacionProductoDto
+                    {
+                        Id = v.Id,
+                        ProductoPadreId = v.ProductoPadreId,
+                        SKU = v.SKU,
+                        Color = v.Color,
+                        Almacenamiento = v.Almacenamiento,
+                        RAM = v.RAM,
+                        Talla = v.Talla,
+                        NombreVariacion = v.NombreVariacion,
+                        PrecioVenta = v.PrecioVenta,
+                        PrecioCosto = v.PrecioCosto,
+                        StockActual = v.StockActual,
+                        StockMinimo = v.StockMinimo,
+                        ImagenUrl = v.ImagenUrl,
+                        Estado = v.Estado
+                    }).ToList(),
+
+                    StockActual = p.TieneVariaciones
+                        ? p.Variaciones.Sum(v => v.StockActual)
+                        : (p.EsSuscripcion
+                            ? (stockPerfilesPool.TryGetValue(p.Id, out int sSusc) ? sSusc : 0)
+                            : (p.EsCodigoDigital
+                                ? (stockCodigosPool.TryGetValue(p.Id, out int sCod) ? sCod : 0)
+                                : p.StockActual)),
+
+                    PrimerPerfilId = p.EsSuscripcion
+                        ? _context.PerfilesCuentas
+                            .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                            .OrderBy(pc => pc.Id)
+                            .Select(pc => (int?)pc.Id)
+                            .FirstOrDefault()
+                        : (p.EsCodigoDigital
+                            ? _context.CodigosDigitales
+                                .Where(c => c.IdProducto == p.Id && !c.Vendido && c.Estado == "Disponible")
+                                .OrderBy(c => c.Id)
+                                .Select(c => (int?)c.Id)
+                                .FirstOrDefault()
+                            : null),
+
+                    MetadataDigital = p.EsSuscripcion
+                        ? _context.PerfilesCuentas
+                            .Where(pc => pc.IdProducto == p.Id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                            .OrderBy(pc => pc.Id)
+                            .Select(pc => $"Perfil: {pc.NombrePerfil} | Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}")
+                            .FirstOrDefault()
+                        : (p.EsCodigoDigital
+                            ? _context.CodigosDigitales
+                                .Where(c => c.IdProducto == p.Id && !c.Vendido && c.Estado == "Disponible")
+                                .OrderBy(c => c.Id)
+                                .Select(c => $"CÓDIGO: {c.Clave}")
+                                .FirstOrDefault()
+                            : null)
+                }).ToList();
+
+                return Ok(respuesta);
             }
             catch (Exception ex)
             {
@@ -112,6 +147,12 @@ namespace NicaplusApi.Controllers
         {
             try
             {
+                var producto = await _context.Productos.FindAsync(id);
+                if (producto == null)
+                {
+                    return NotFound(new { mensaje = "El producto no existe." });
+                }
+
                 var idsIgnorados = string.IsNullOrWhiteSpace(ignorados)
                     ? new List<int>()
                     : ignorados.Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -119,25 +160,55 @@ namespace NicaplusApi.Controllers
                             .Where(v => v > 0)
                             .ToList();
 
-                var credencial = await _context.PerfilesCuentas
-                    .AsNoTracking()
-                    .Where(pc => pc.IdProducto == id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
-                    .Where(pc => !idsIgnorados.Contains(pc.Id))
-                    .OrderBy(pc => pc.Id)
-                    .Select(pc => new
-                    {
-                        disponible = true,
-                        idPerfil = pc.Id,
-                        metadataDigital = $"Perfil: {pc.NombrePerfil} | Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}"
-                    })
-                    .FirstOrDefaultAsync();
-
-                if (credencial == null)
+                // 1. CÓDIGO DIGITAL
+                if (producto.EsCodigoDigital)
                 {
-                    return Ok(new { disponible = false, metadataDigital = (string?)null, idPerfil = 0 });
+                    var codigoDisponible = await _context.CodigosDigitales
+                        .AsNoTracking()
+                        .Where(c => c.IdProducto == id && !c.Vendido && c.Estado == "Disponible")
+                        .Where(c => !idsIgnorados.Contains(c.Id))
+                        .OrderBy(c => c.Id)
+                        .Select(c => new
+                        {
+                            disponible = true,
+                            idPerfil = c.Id,
+                            metadataDigital = $"CÓDIGO: {c.Clave}"
+                        })
+                        .FirstOrDefaultAsync();
+
+                    if (codigoDisponible == null)
+                    {
+                        return Ok(new { disponible = false, metadataDigital = (string?)null, idPerfil = 0 });
+                    }
+
+                    return Ok(codigoDisponible);
                 }
 
-                return Ok(credencial);
+                // 2. SUSCRIPCIÓN STREAMING
+                if (producto.EsSuscripcion)
+                {
+                    var credencial = await _context.PerfilesCuentas
+                        .AsNoTracking()
+                        .Where(pc => pc.IdProducto == id && !pc.Ocupado && pc.EstadoPerfil == "Disponible")
+                        .Where(pc => !idsIgnorados.Contains(pc.Id))
+                        .OrderBy(pc => pc.Id)
+                        .Select(pc => new
+                        {
+                            disponible = true,
+                            idPerfil = pc.Id,
+                            metadataDigital = $"Perfil: {pc.NombrePerfil} | Cuenta: {pc.CorreoCuenta} | Pass: {pc.PasswordCuenta} | PIN: {pc.PIN}"
+                        })
+                        .FirstOrDefaultAsync();
+
+                    if (credencial == null)
+                    {
+                        return Ok(new { disponible = false, metadataDigital = (string?)null, idPerfil = 0 });
+                    }
+
+                    return Ok(credencial);
+                }
+
+                return Ok(new { disponible = false, metadataDigital = (string?)null, idPerfil = 0 });
             }
             catch (Exception ex)
             {
@@ -146,7 +217,7 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // GET: api/Products/catalogo (Público para Tienda / POS)
+        // GET: api/Products/catalogo (Público)
         [HttpGet("catalogo")]
         [AllowAnonymous]
         public async Task<IActionResult> GetCatalogoPublico()
@@ -157,6 +228,13 @@ namespace NicaplusApi.Controllers
                     .AsNoTracking()
                     .Where(pc => !pc.Ocupado && pc.EstadoPerfil == "Disponible")
                     .GroupBy(pc => pc.IdProducto)
+                    .Select(g => new { IdProducto = g.Key, TotalDisponibles = g.Count() })
+                    .ToDictionaryAsync(x => x.IdProducto, x => x.TotalDisponibles);
+
+                var stockCodigosPool = await _context.CodigosDigitales
+                    .AsNoTracking()
+                    .Where(c => !c.Vendido && c.Estado == "Disponible")
+                    .GroupBy(c => c.IdProducto)
                     .Select(g => new { IdProducto = g.Key, TotalDisponibles = g.Count() })
                     .ToDictionaryAsync(x => x.IdProducto, x => x.TotalDisponibles);
 
@@ -177,6 +255,7 @@ namespace NicaplusApi.Controllers
                     PrecioVenta = p.PrecioVenta,
                     ImagenUrl = p.ImagenUrl,
                     EsDigital = p.EsDigital,
+                    EsCodigoDigital = p.EsCodigoDigital,
                     EsSuscripcion = p.EsSuscripcion,
                     DiasDuracion = p.DiasDuracion,
                     VisibleEnCatalogo = p.VisibleEnCatalogo,
@@ -207,8 +286,10 @@ namespace NicaplusApi.Controllers
                     StockActual = p.TieneVariaciones
                         ? (p.Variaciones != null ? p.Variaciones.Sum(v => v.StockActual) : 0)
                         : (p.EsSuscripcion 
-                            ? (stockPerfilesPool.TryGetValue(p.Id, out int stockCalculado) ? stockCalculado : 0)
-                            : p.StockActual)
+                            ? (stockPerfilesPool.TryGetValue(p.Id, out int stockSuscripcion) ? stockSuscripcion : 0)
+                            : (p.EsCodigoDigital 
+                                ? (stockCodigosPool.TryGetValue(p.Id, out int stockCodigos) ? stockCodigos : 0)
+                                : p.StockActual))
                 }).ToList();
 
                 return Ok(catalogo);
@@ -276,6 +357,7 @@ namespace NicaplusApi.Controllers
                     StockMinimo = (dto.EsDigital || dto.RequiereServicio || !dto.ControlaStock || dto.TieneVariaciones) ? 0 : dto.StockMinimo,
                     ImagenUrl = dto.ImagenUrl?.Trim() ?? string.Empty,
                     EsDigital = dto.EsDigital,
+                    EsCodigoDigital = dto.EsCodigoDigital,
                     ControlaStock = dto.ControlaStock,
                     RequiereServicio = dto.RequiereServicio,
                     VisibleEnCatalogo = dto.VisibleEnCatalogo,
@@ -289,7 +371,6 @@ namespace NicaplusApi.Controllers
                     TieneVariaciones = dto.TieneVariaciones
                 };
 
-                // Inserción de variaciones asociadas (con manejo seguro de nulabilidad)
                 if (dto.TieneVariaciones && dto.Variaciones != null && dto.Variaciones.Any())
                 {
                     string nombrePrefijo = !string.IsNullOrEmpty(dto.Nombre) && dto.Nombre.Length >= 3 
@@ -312,7 +393,7 @@ namespace NicaplusApi.Controllers
                             PrecioCosto = vDto.PrecioCosto > 0 ? vDto.PrecioCosto : dto.PrecioCosto,
                             StockActual = vDto.StockActual,
                             StockMinimo = vDto.StockMinimo > 0 ? vDto.StockMinimo : 2,
-                            ImagenUrl = string.IsNullOrWhiteSpace(vDto.ImagenUrl) ? dto.ImagenUrl : (vDto.ImagenUrl ?? string.Empty),
+                            ImagenUrl = string.IsNullOrWhiteSpace(vDto.ImagenUrl) ? (dto.ImagenUrl ?? string.Empty) : (vDto.ImagenUrl ?? string.Empty),
                             Estado = "Activo"
                         });
                     }
@@ -366,6 +447,7 @@ namespace NicaplusApi.Controllers
                 productoExistente.PrecioCosto = dto.PrecioCosto;
                 productoExistente.ImagenUrl = dto.ImagenUrl?.Trim() ?? string.Empty;
                 productoExistente.EsDigital = dto.EsDigital;
+                productoExistente.EsCodigoDigital = dto.EsCodigoDigital;
                 productoExistente.ControlaStock = dto.ControlaStock;
                 productoExistente.RequiereServicio = dto.RequiereServicio;
                 productoExistente.VisibleEnCatalogo = dto.VisibleEnCatalogo;
@@ -389,7 +471,6 @@ namespace NicaplusApi.Controllers
                     productoExistente.StockMinimo = dto.StockMinimo;
                 }
 
-                // Sincronización completa de Variaciones (Crear, Actualizar o Eliminar)
                 if (dto.TieneVariaciones && dto.Variaciones != null)
                 {
                     var idsNuevos = dto.Variaciones.Where(v => v.Id > 0).Select(v => v.Id).ToList();
@@ -452,7 +533,7 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // 6. PUT: api/Products/5/variaciones-stock (Sincronización del Modal Incremento/Decremento)
+        // 6. PUT: api/Products/5/variaciones-stock
         [HttpPut("{id}/variaciones-stock")]
         [Authorize]
         public async Task<IActionResult> UpdateStockVariaciones(int id, [FromBody] List<VariacionProductoDto> variacionesDto)

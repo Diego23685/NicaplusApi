@@ -19,6 +19,7 @@ namespace NicaplusApi.Models
         public bool ControlaStock { get; set; } = true;
 
         public bool RequiereServicio { get; set; }
+        public bool EsCodigoDigital { get; set; } = false;
         public bool VisibleEnCatalogo { get; set; }
         public bool EsSuscripcion { get; set; } 
         public int DiasDuracion { get; set; } = 30; 

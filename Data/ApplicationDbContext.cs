@@ -46,6 +46,7 @@ namespace NicaplusApi.Data
         public DbSet<Renovacion> Renovaciones { get; set; }
         public DbSet<Cancelacion> Cancelaciones { get; set; }
         public DbSet<VariacionProducto> VariacionesProductos { get; set; }
+        public DbSet<CodigoDigital> CodigosDigitales { get; set; }
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {

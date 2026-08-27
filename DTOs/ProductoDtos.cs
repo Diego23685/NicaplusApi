@@ -21,6 +21,7 @@ namespace NicaplusApi.DTOs
         public string ImagenUrl { get; set; } = string.Empty;
 
         public bool EsDigital { get; set; }
+        public bool EsCodigoDigital { get; set; } = false;
         public bool ControlaStock { get; set; } = true;
         public bool RequiereServicio { get; set; }
         public bool VisibleEnCatalogo { get; set; } = true;
@@ -43,7 +44,6 @@ namespace NicaplusApi.DTOs
     {
         [Required(ErrorMessage = "El ID del producto es obligatorio.")]
         public int Id { get; set; }
-        // Se eliminaron 'TieneVariaciones' y 'Variaciones' duplicadas de la herencia
     }
 
     public class ProductoCatalogoResponseDto
@@ -54,6 +54,7 @@ namespace NicaplusApi.DTOs
         public decimal PrecioVenta { get; set; }
         public string ImagenUrl { get; set; } = string.Empty;
         public bool EsDigital { get; set; }
+        public bool EsCodigoDigital { get; set; }
         public string? MetadataDigital { get; set; }
         public bool EsSuscripcion { get; set; }
         public int DiasDuracion { get; set; }
@@ -77,7 +78,6 @@ namespace NicaplusApi.DTOs
         public int? CategoriaId { get; set; }
         public int? JuegoId { get; set; }
         public int? PrimerPerfilId { get; set; }
-        // Se eliminaron 'TieneVariaciones' y 'Variaciones' duplicadas de la herencia
     }
 
     public class VariacionProductoDto

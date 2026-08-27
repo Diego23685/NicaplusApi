@@ -212,9 +212,13 @@ namespace NicaplusApi.Controllers
                             return BadRequest(new { mensaje = $"Stock insuficiente para: {prod.Nombre} ({variacionElegida.NombreVariacion}). Disponible: {variacionElegida.StockActual}" });
                         }
 
-                        variacionElegida.StockActual -= itemDto.Cantidad;
-                        if (variacionElegida.StockActual <= 0) variacionElegida.Estado = "Agotado";
-                        _context.VariacionesProductos.Update(variacionElegida);
+                        // Si NO es digital por códigos, se descuenta stock físico/variante estándar
+                        if (!prod.EsDigital)
+                        {
+                            variacionElegida.StockActual -= itemDto.Cantidad;
+                            if (variacionElegida.StockActual <= 0) variacionElegida.Estado = "Agotado";
+                            _context.VariacionesProductos.Update(variacionElegida);
+                        }
                     }
                     else if (prod.ControlaStock && !prod.EsDigital && !prod.RequiereServicio)
                     {
@@ -237,7 +241,57 @@ namespace NicaplusApi.Controllers
                         SubTotal = (itemDto.Cantidad * itemDto.PrecioUnitario) - itemDto.Descuento
                     };
 
-                    if (prod.EsSuscripcion)
+                    // =========================================================
+                    // ASIGNACIÓN DIGITAL SEGÚN TIPO DE PRODUCTO
+                    // =========================================================
+
+                    // 1. POOL DE CÓDIGOS / SERIALES (Xbox, Steam, Minecraft, etc.)
+                    if (prod.EsDigital && prod.EsCodigoDigital && !prod.EsSuscripcion)
+                    {
+                        var queryCodigos = _context.CodigosDigitales
+                            .Where(c => c.IdProducto == prod.Id && !c.Vendido && c.Estado == "Disponible");
+
+                        if (itemDto.IdVariacion.HasValue && itemDto.IdVariacion.Value > 0)
+                        {
+                            queryCodigos = queryCodigos.Where(c => c.IdVariacion == itemDto.IdVariacion.Value);
+                        }
+
+                        var codigosAsignados = await queryCodigos
+                            .OrderBy(c => c.Id)
+                            .Take(itemDto.Cantidad)
+                            .ToListAsync();
+
+                        if (codigosAsignados.Count < itemDto.Cantidad)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { mensaje = $"Stock de códigos insuficiente para '{prod.Nombre}'. Disponibles: {codigosAsignados.Count}" });
+                        }
+
+                        var listaClaves = new List<string>();
+                        foreach (var cod in codigosAsignados)
+                        {
+                            cod.Vendido = true;
+                            cod.Estado = "Vendido";
+                            cod.FechaVenta = fechaEfectiva;
+                            cod.IdVenta = nuevaVenta.Id;
+                            cod.IdClienteAsignado = idClienteFinal;
+                            _context.CodigosDigitales.Update(cod);
+
+                            listaClaves.Add(cod.Clave);
+                        }
+
+                        detalleVenta.MetadataDigital = string.Join(" | ", listaClaves.Select(k => $"CÓDIGO: {k}"));
+                    }
+                    // 2. RECARGAS / MONEDAS / SERVICIOS DIGITALES (Sin pool de códigos)
+                    else if (prod.EsDigital && !prod.EsSuscripcion && !prod.EsCodigoDigital)
+                    {
+                        if (!string.IsNullOrWhiteSpace(itemDto.MetadataDigital))
+                        {
+                            detalleVenta.MetadataDigital = itemDto.MetadataDigital.Trim();
+                        }
+                    }
+                    // 3. SUSCRIPCIONES STREAMING (Perfiles de cuentas)
+                    else if (prod.EsSuscripcion)
                     {
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente asignar un cliente." });
@@ -411,7 +465,6 @@ namespace NicaplusApi.Controllers
                     .Where(s => s.IdVenta == id || s.Id == ventaOriginal.IdSuscripcion)
                     .ToListAsync();
 
-                // Búsqueda de respaldo si no estaban vinculadas por ID explícito
                 if (!suscripcionesViejas.Any() && ventaOriginal.IdCliente.HasValue)
                 {
                     var idsProductosVenta = ventaOriginal.Detalles.Select(d => d.IdProducto).ToList();
@@ -427,7 +480,6 @@ namespace NicaplusApi.Controllers
                     .Select(s => s.IdPerfilCuenta!.Value)
                     .ToList();
 
-                // Liberar temporalmente los perfiles para que la reasignación los tome sin conflicto de duplicidad
                 var perfilesAfectados = await _context.PerfilesCuentas
                     .Where(p => idsPerfilesPropios.Contains(p.Id))
                     .ToListAsync();
@@ -440,7 +492,6 @@ namespace NicaplusApi.Controllers
                     _context.PerfilesCuentas.Update(p);
                 }
 
-                // Limpiar los detalles de venta anteriores
                 _context.DetallesVentas.RemoveRange(ventaOriginal.Detalles);
                 await _context.SaveChangesAsync();
 
@@ -459,7 +510,6 @@ namespace NicaplusApi.Controllers
                     if (prod == null)
                         return BadRequest(new { mensaje = $"El producto con ID {itemDto.IdProducto} no existe." });
 
-                    // Descuento de inventario según tipo de producto/variante
                     if (itemDto.IdVariacion.HasValue && itemDto.IdVariacion.Value > 0)
                     {
                         var variacionElegida = await _context.VariacionesProductos.FindAsync(itemDto.IdVariacion.Value);
@@ -499,7 +549,6 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente un cliente." });
 
-                        // Tomar la suscripción previa no procesada
                         var suscripcionAnterior = suscripcionesViejas
                             .FirstOrDefault(s => !suscripcionesProcesadas.Contains(s.Id));
 
@@ -537,7 +586,6 @@ namespace NicaplusApi.Controllers
                         {
                             suscripcionesProcesadas.Add(suscripcionAnterior.Id);
 
-                            // Actualizar sobre el mismo registro sin crear duplicados
                             suscripcionAnterior.IdCliente = idClienteFinal.Value;
                             suscripcionAnterior.IdVenta = id;
                             suscripcionAnterior.IdProducto = prod.Id;
@@ -574,7 +622,6 @@ namespace NicaplusApi.Controllers
                     nuevoTotalCalculado += nuevoDetalle.SubTotal;
                 }
 
-                // Eliminar suscripciones sobrantes si en la edición se redujeron líneas
                 var suscripcionesSobrantes = suscripcionesViejas
                     .Where(s => !suscripcionesProcesadas.Contains(s.Id))
                     .ToList();
@@ -656,7 +703,7 @@ namespace NicaplusApi.Controllers
                     return NotFound(new { mensaje = "La venta especificada no existe." });
 
                 // =========================================================
-                // 1. RESTAURACIÓN DE INVENTARIO
+                // 1. RESTAURACIÓN DE INVENTARIO FÍSICO / VARIANTES
                 // =========================================================
                 foreach (var detalle in venta.Detalles)
                 {
@@ -676,7 +723,7 @@ namespace NicaplusApi.Controllers
                     else
                     {
                         var prod = await _context.Productos.FindAsync(detalle.IdProducto);
-                        if (prod != null && prod.ControlaStock)
+                        if (prod != null && prod.ControlaStock && !prod.EsDigital)
                         {
                             prod.StockActual += detalle.Cantidad;
                             if (prod.Estado == "Agotado" && prod.StockActual > 0)
@@ -689,8 +736,22 @@ namespace NicaplusApi.Controllers
                 }
 
                 // =========================================================
-                // 2. LIBERACIÓN DE PERFILES Y ELIMINACIÓN DE SUSCRIPCIONES
+                // 2. LIBERACIÓN DE CÓDIGOS, PERFILES Y SUSCRIPCIONES
                 // =========================================================
+                var codigosVendidos = await _context.CodigosDigitales
+                    .Where(c => c.IdVenta == id)
+                    .ToListAsync();
+
+                foreach (var cod in codigosVendidos)
+                {
+                    cod.Vendido = false;
+                    cod.Estado = "Disponible";
+                    cod.FechaVenta = null;
+                    cod.IdVenta = null;
+                    cod.IdClienteAsignado = null;
+                    _context.CodigosDigitales.Update(cod);
+                }
+
                 var suscripciones = await _context.Suscripciones
                     .Where(s => s.IdVenta == id || s.Id == venta.IdSuscripcion)
                     .ToListAsync();

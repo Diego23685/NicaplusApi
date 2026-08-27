@@ -54,7 +54,7 @@ namespace NicaplusApi.Controllers
                 }
 
                 // Generar URL completa pública
-                string host = Request.Host.Value;
+                string host = Request.Host.Value ?? "localhost";
                 string scheme = Request.Scheme; // http o https
                 string urlRelativa = $"/uploads/products/{nombreArchivo}";
                 string urlCompleta = $"{scheme}://{host}{urlRelativa}";
