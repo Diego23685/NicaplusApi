@@ -146,7 +146,7 @@ namespace NicaplusApi.Controllers
             }
         }
 
-        // 2. GET: api/Products/catalogo (Público para Tienda / POS)
+        // GET: api/Products/catalogo (Público para Tienda / POS)
         [HttpGet("catalogo")]
         [AllowAnonymous]
         public async Task<IActionResult> GetCatalogoPublico()
@@ -183,8 +183,29 @@ namespace NicaplusApi.Controllers
                     CategoriaNombre = p.Categoria?.Nombre,
                     JuegoNombre = p.Juego?.Nombre,
                     TieneVariaciones = p.TieneVariaciones,
+                    Variaciones = p.TieneVariaciones && p.Variaciones != null
+                        ? p.Variaciones
+                            .Where(v => v.Estado == "Activo")
+                            .Select(v => new VariacionProductoDto
+                            {
+                                Id = v.Id,
+                                ProductoPadreId = v.ProductoPadreId,
+                                SKU = v.SKU,
+                                Color = v.Color,
+                                Almacenamiento = v.Almacenamiento,
+                                RAM = v.RAM,
+                                Talla = v.Talla,
+                                NombreVariacion = v.NombreVariacion,
+                                PrecioVenta = v.PrecioVenta,
+                                PrecioCosto = v.PrecioCosto,
+                                StockActual = v.StockActual,
+                                StockMinimo = v.StockMinimo,
+                                ImagenUrl = v.ImagenUrl,
+                                Estado = v.Estado
+                            }).ToList()
+                        : new List<VariacionProductoDto>(),
                     StockActual = p.TieneVariaciones
-                        ? p.Variaciones.Sum(v => v.StockActual)
+                        ? (p.Variaciones != null ? p.Variaciones.Sum(v => v.StockActual) : 0)
                         : (p.EsSuscripcion 
                             ? (stockPerfilesPool.TryGetValue(p.Id, out int stockCalculado) ? stockCalculado : 0)
                             : p.StockActual)
