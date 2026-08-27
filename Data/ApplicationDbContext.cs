@@ -1,7 +1,10 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.Extensions.Configuration;
 using NicaplusApi.Models;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Security.Claims;
 using System.Text.Json;
@@ -16,6 +19,7 @@ namespace NicaplusApi.Data
         private readonly IHttpContextAccessor _httpContextAccessor;
         private static readonly TimeZoneInfo NicaraguaZone = TimeZoneInfo.FindSystemTimeZoneById("Central America Standard Time");
 
+        // Único constructor requerido para la ejecución de la aplicación
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) 
             : base(options)
         {
@@ -47,6 +51,7 @@ namespace NicaplusApi.Data
         public DbSet<Cancelacion> Cancelaciones { get; set; }
         public DbSet<VariacionProducto> VariacionesProductos { get; set; }
         public DbSet<CodigoDigital> CodigosDigitales { get; set; }
+        public DbSet<TasaDeCambio> TasasDeCambio { get; set; }
 
         public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
         {
@@ -61,7 +66,6 @@ namespace NicaplusApi.Data
             
             var ahoraNicaragua = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NicaraguaZone);
 
-            // 2. Capturar las modificaciones ANTES de alterar el tracker
             var entradasModificadas = ChangeTracker.Entries()
                 .Where(e => e.State != EntityState.Unchanged && e.Entity.GetType() != typeof(LogAuditoria))
                 .ToList(); 
@@ -72,7 +76,6 @@ namespace NicaplusApi.Data
                 var datosNuevos = new Dictionary<string, object?>();
                 var datosViejos = new Dictionary<string, object?>();
 
-                // Llenar diccionarios de auditoría
                 if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
                 {
                     foreach (var prop in entry.CurrentValues.Properties)
@@ -88,10 +91,8 @@ namespace NicaplusApi.Data
                     }
                 }
 
-                // --- CONSTRUCCIÓN DINÁMICA DEL NOMBRE AFECTADO ---
                 var valoresReferencia = entry.State == EntityState.Deleted ? entry.OriginalValues : entry.CurrentValues;
 
-                // 1. Intentar buscar propiedades de texto comunes
                 var propiedadTexto = valoresReferencia.Properties
                     .FirstOrDefault(p => p.Name.ToLower() == "nombre" 
                                     || p.Name.ToLower() == "razonsocial" 
@@ -105,7 +106,6 @@ namespace NicaplusApi.Data
                 }
                 else
                 {
-                    // 2. Buscar dinámicamente la propiedad de clave primaria (o "Id")
                     var propiedadId = valoresReferencia.Properties.FirstOrDefault(p => p.IsPrimaryKey() || p.Name.ToLower() == "id");
                     var idValor = propiedadId != null ? valoresReferencia[propiedadId]?.ToString() : "N/A";
 
@@ -135,7 +135,6 @@ namespace NicaplusApi.Data
                     ValoresAnteriores = datosViejos
                 };
 
-                // 3. CREACIÓN DIRECTA EN EL TRACKER
                 var nuevoLog = new LogAuditoria
                 {
                     IdUsuario = tipoUsuario == "Administrador" && int.TryParse(userIdString, out var idUser) ? idUser : null,
@@ -150,7 +149,6 @@ namespace NicaplusApi.Data
                 Entry(nuevoLog).State = EntityState.Added;
             }
             
-            // 4. Ejecutar el guardado único de todo lo que está en el tracker
             return await base.SaveChangesAsync(ct);
         }
 
@@ -201,10 +199,29 @@ namespace NicaplusApi.Data
                 .HasForeignKey(v => v.IdSuscripcion)
                 .OnDelete(DeleteBehavior.Restrict);
 
-                // Fuerza a EF a enviar el valor de la fecha directamente en el comando INSERT
             modelBuilder.Entity<LogAuditoria>()
                 .Property(l => l.FechaRegistro)
-                .ValueGeneratedNever(); // ◄ EVITA QUE LA BD ASUMA VALORES POR DEFECTO
+                .ValueGeneratedNever();
+        }
+    }
+
+    // Fábrica para tiempo de diseño: Aísla a "dotnet ef" de la inyección de dependencias de ASP.NET
+    public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
+    {
+        public ApplicationDbContext CreateDbContext(string[] args)
+        {
+            var configuration = new ConfigurationBuilder()
+                .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile("appsettings.json", optional: true)
+                .Build();
+
+            var builder = new DbContextOptionsBuilder<ApplicationDbContext>();
+            var connectionString = configuration.GetConnectionString("DefaultConnection") 
+                ?? "Server=localhost;Database=nicaplus;User=root;Password=;";
+
+            builder.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
+
+            return new ApplicationDbContext(builder.Options, new HttpContextAccessor());
         }
     }
 }
