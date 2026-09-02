@@ -35,6 +35,11 @@ namespace NicaplusApi.DTOs
         public decimal Descuento { get; set; } = 0m;
 
         public string MetadataDigital { get; set; } = string.Empty;
+
+        // IDs exactos de PerfilesCuentas que la caja mostró/reservó para este renglón
+        // (vienen de /products/{id}/siguiente-credencial). El backend debe honrarlos
+        // en vez de resolver su propio perfil "más disponible".
+        public List<int>? IdsPerfiles { get; set; }
     }
 
     public class ActualizarVentaDto
@@ -76,5 +81,16 @@ namespace NicaplusApi.DTOs
         public decimal Descuento { get; set; }
         public decimal SubTotal { get; set; }
         public string MetadataDigital { get; set; } = string.Empty;
+    }
+
+    // Respuesta del POST /ventas: incluye el detalle CON el MetadataDigital
+    // realmente asignado en BD, para que la caja nunca tenga que "adivinar"
+    // qué credencial quedó ligada al cliente.
+    public class VentaCreadaResponseDto
+    {
+        public string Mensaje { get; set; } = string.Empty;
+        public int IdVenta { get; set; }
+        public decimal Total { get; set; }
+        public List<DetalleVentaResumenDto> Detalles { get; set; } = new();
     }
 }

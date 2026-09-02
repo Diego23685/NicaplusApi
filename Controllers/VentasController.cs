@@ -192,6 +192,7 @@ namespace NicaplusApi.Controllers
                 await _context.SaveChangesAsync();
 
                 decimal totalAcumulado = 0m;
+                var detallesRespuesta = new List<DetalleVentaResumenDto>();
 
                 foreach (var itemDto in dto.Detalles)
                 {
@@ -296,32 +297,60 @@ namespace NicaplusApi.Controllers
                         if (!idClienteFinal.HasValue)
                             return BadRequest(new { mensaje = $"El servicio '{prod.Nombre}' requiere obligatoriamente asignar un cliente." });
 
-                        var grupoValido = await _context.PerfilesCuentas
-                            .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !string.IsNullOrEmpty(p.AccountGroupKey))
-                            .GroupBy(p => p.AccountGroupKey)
-                            .Where(g => g.Count() >= itemDto.Cantidad)
-                            .Select(g => g.Key)
-                            .FirstOrDefaultAsync();
-
                         List<PerfilCuenta> perfilesAsignados = new List<PerfilCuenta>();
 
-                        if (!string.IsNullOrEmpty(grupoValido))
+                        // 3.1 PRIORIDAD: honrar exactamente los perfiles que la caja mostró
+                        // al cajero (obtenidos vía /siguiente-credencial). Si alguno ya no
+                        // está disponible (otro cajero se lo llevó primero), simplemente no
+                        // se incluye y se completa con el fallback de abajo.
+                        if (itemDto.IdsPerfiles != null && itemDto.IdsPerfiles.Count > 0)
                         {
+                            var idsSolicitados = itemDto.IdsPerfiles.Take(itemDto.Cantidad).ToList();
+
                             perfilesAsignados = await _context.PerfilesCuentas
-                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && p.AccountGroupKey == grupoValido)
-                                .Take(itemDto.Cantidad)
+                                .Where(p => idsSolicitados.Contains(p.Id) && p.IdProducto == prod.Id && !p.Ocupado)
                                 .ToListAsync();
                         }
-                        else
+
+                        int faltantes = itemDto.Cantidad - perfilesAsignados.Count;
+
+                        if (faltantes > 0)
                         {
-                            perfilesAsignados = await _context.PerfilesCuentas
-                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado)
-                                .Take(itemDto.Cantidad)
-                                .ToListAsync();
+                            var idsYaTomados = perfilesAsignados.Select(p => p.Id).ToList();
+
+                            var grupoValido = await _context.PerfilesCuentas
+                                .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !idsYaTomados.Contains(p.Id) && !string.IsNullOrEmpty(p.AccountGroupKey))
+                                .GroupBy(p => p.AccountGroupKey)
+                                .Where(g => g.Count() >= faltantes)
+                                .OrderBy(g => g.Key)
+                                .Select(g => g.Key)
+                                .FirstOrDefaultAsync();
+
+                            List<PerfilCuenta> extra;
+
+                            if (!string.IsNullOrEmpty(grupoValido))
+                            {
+                                extra = await _context.PerfilesCuentas
+                                    .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !idsYaTomados.Contains(p.Id) && p.AccountGroupKey == grupoValido)
+                                    .OrderBy(p => p.Id)
+                                    .Take(faltantes)
+                                    .ToListAsync();
+                            }
+                            else
+                            {
+                                extra = await _context.PerfilesCuentas
+                                    .Where(p => p.IdProducto == prod.Id && !p.Ocupado && !idsYaTomados.Contains(p.Id))
+                                    .OrderBy(p => p.Id)
+                                    .Take(faltantes)
+                                    .ToListAsync();
+                            }
+
+                            perfilesAsignados.AddRange(extra);
                         }
 
                         if (perfilesAsignados.Count < itemDto.Cantidad)
                         {
+                            await transaction.RollbackAsync();
                             return BadRequest(new { mensaje = $"No existen suficientes pantallas/perfiles disponibles para '{prod.Nombre}'." });
                         }
 
@@ -363,6 +392,16 @@ namespace NicaplusApi.Controllers
 
                     _context.DetallesVentas.Add(detalleVenta);
                     totalAcumulado += detalleVenta.SubTotal;
+
+                    detallesRespuesta.Add(new DetalleVentaResumenDto
+                    {
+                        IdProducto = detalleVenta.IdProducto,
+                        Cantidad = detalleVenta.Cantidad,
+                        PrecioUnitario = detalleVenta.PrecioUnitario,
+                        Descuento = detalleVenta.Descuento,
+                        SubTotal = detalleVenta.SubTotal,
+                        MetadataDigital = detalleVenta.MetadataDigital ?? string.Empty
+                    });
                 }
 
                 nuevaVenta.Total = totalAcumulado;
@@ -397,11 +436,12 @@ namespace NicaplusApi.Controllers
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                return CreatedAtAction(nameof(GetById), new { id = nuevaVenta.Id }, new
+                return CreatedAtAction(nameof(GetById), new { id = nuevaVenta.Id }, new VentaCreadaResponseDto
                 {
-                    mensaje = "Venta registrada con éxito.",
-                    idVenta = nuevaVenta.Id,
-                    total = totalAcumulado
+                    Mensaje = "Venta registrada con éxito.",
+                    IdVenta = nuevaVenta.Id,
+                    Total = totalAcumulado,
+                    Detalles = detallesRespuesta
                 });
             }
             catch (Exception ex)
